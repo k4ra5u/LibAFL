@@ -9,6 +9,6 @@ cd Little-CMS
 ./configure
 
 
-make -j $(nproc)
-
+#make -j $(nproc)
+make
 $CXX $CXXFLAGS ../cms_transform_fuzzer.cc -I include/ src/.libs/liblcms2.a -o ../fuzzer
