@@ -2,7 +2,7 @@ use std::{
     any::Any, env, ffi::{OsStr, OsString}, io::{self, prelude::*, ErrorKind, Read, Write}, os::{
         fd::{AsRawFd, BorrowedFd},
         unix::{io::RawFd, process::CommandExt},
-    }, path::Path, process::{Child, Command, Output, Stdio}, str, time::Duration
+    }, path::Path, process::{Child, Command, Output, Stdio}, str, thread::sleep, time::Duration
 };
 use std::num::ParseIntError;
 use libc::ERA;
@@ -133,7 +133,9 @@ pub fn decode_pkt(
     let mut hdr = Header::from_bytes(&mut b, conn.source_id().len()).unwrap();
 
     let epoch = hdr.ty.to_epoch()?;
-
+    if hdr.ty !=packet::Type::Short {
+        return Err(Error::InvalidPacket);
+    }
     let aead = conn.pkt_num_spaces[epoch].crypto_open.as_ref().unwrap();
 
     let payload_len = b.cap();
@@ -160,6 +162,236 @@ pub fn decode_pkt(
     Ok(frames)
 }
 
+
+struct FramesCycleStruct {
+    repeat_num: usize,
+    basic_frames: Vec<frame::Frame>,
+}
+
+impl FramesCycleStruct {
+
+    pub fn new() ->Self {
+        Self {
+            repeat_num: 0,
+            basic_frames: Vec::new(),
+        }
+    }
+
+    pub fn set_repeat_num(mut self, repeat_num: usize) -> Self {
+        self.repeat_num = repeat_num;
+        self
+    }
+
+    pub fn add_frame(mut self, frame: frame::Frame) -> Self {
+        self.basic_frames.push(frame);
+        self
+    }
+
+    pub fn new_with_input(pkt_type: packet::Type, input: &[u8]) -> Self {
+        let repeat_num = u64::from_le_bytes(input[0..8].try_into().unwrap()) as usize;
+        let input = &input[8..];
+        let mut left = input.len();
+        let mut basic_frames = Vec::new();
+        let mut octets_input = octets::Octets::with_slice(input);
+        while left > 0 {
+            let frame = frame::Frame::from_bytes(&mut octets_input, pkt_type).unwrap();
+            // left -= frame.wire_len();
+            left = octets_input.len();
+            println!("frame: {:?}", frame);
+            basic_frames.push(frame);
+            
+        }
+        Self {
+            repeat_num,
+            basic_frames,
+        }
+    }
+}
+
+enum pkt_resort_type {
+    None,
+    Random,
+    Reverse,
+    Odd_even,
+}
+struct InputStruct {
+    pkt_type: packet::Type,
+    send_timeout: Duration,
+    recv_timeout: Duration,
+    packet_resort_type: pkt_resort_type,
+    number_of_cycles: usize,
+    cycles_len: Vec<usize>,
+    frames_cycle: Vec<FramesCycleStruct>,
+}
+impl InputStruct {
+    pub fn new() -> Self {
+        Self {
+            pkt_type: packet::Type::Short,
+            send_timeout: Duration::from_secs(1),
+            recv_timeout: Duration::from_secs(1),
+            packet_resort_type: pkt_resort_type::None,
+            number_of_cycles: 0,
+            cycles_len: Vec::new(),
+            frames_cycle: Vec::new(),
+        }
+    }
+    pub fn set_pkt_type(mut self,pkt_type: packet::Type ) -> Self {
+        self.pkt_type = pkt_type;
+        self
+    }
+    pub fn set_send_timeout(mut self, send_timeout: u64) -> Self {
+        self.send_timeout = Duration::from_millis(send_timeout);;
+        self
+    }
+    pub fn set_recv_timeout(mut self, recv_timeout:u64  ) -> Self {
+        self.recv_timeout = Duration::from_millis(recv_timeout);
+        self
+    }
+    pub fn set_packet_resort_type(mut self, packet_resort_type: pkt_resort_type) -> Self {
+        self.packet_resort_type = packet_resort_type;
+        self
+    }
+
+    pub fn add_frames_cycle(mut self, frames_cycle: FramesCycleStruct) -> Self {
+        self.frames_cycle.push(frames_cycle);
+        self
+    }
+    pub fn calc_frames_cycle_len(mut self) -> Self {
+        self.number_of_cycles = self.frames_cycle.len();
+
+        let mut frames_cycle_bytes = Vec::new();
+        self.cycles_len = Vec::new();
+        let mut current_framses_len:u64 =0;
+        for frame_cycle in self.frames_cycle.iter(){
+            frames_cycle_bytes.extend_from_slice(&(frame_cycle.repeat_num as u64).to_le_bytes());
+            for frame in &frame_cycle.basic_frames {
+                let mut d = Vec::new();
+                let mut b = octets::OctetsMut::with_slice(&mut d);
+                frame.to_bytes(& mut b);
+                frames_cycle_bytes.extend_from_slice(&d);
+            }
+            self.cycles_len.push(frames_cycle_bytes.len() - current_framses_len as usize);
+            current_framses_len = frames_cycle_bytes.len() as u64;
+        }
+        self
+    }
+
+    pub fn parse_struct_from_input(mut self,input: &[u8]) -> Self {
+        let pkt_type = match (input[0]%6){
+            0 => packet::Type::Initial,
+            1 => packet::Type::Retry,
+            2 => packet::Type::Handshake,
+            3 => packet::Type::ZeroRTT,
+            4 => packet::Type::VersionNegotiation,
+            5 => packet::Type::Short,
+            _ => packet::Type::Short,
+        };
+        let send_mili_secs = u64::from_le_bytes(input[1..9].try_into().unwrap());
+        let recv_mili_secs = u64::from_le_bytes(input[9..17].try_into().unwrap());
+        let packet_resort_type = match input[17] {
+            0 => pkt_resort_type::None,
+            1 => pkt_resort_type::Random,
+            2 => pkt_resort_type::Reverse,
+            3 => pkt_resort_type::Odd_even,
+            _ => pkt_resort_type::None,
+        };
+        let number_of_cycles = u64::from_le_bytes(input[17..25].try_into().unwrap()) as usize;
+        let mut cycles_len = Vec::new();
+        for i in 0..number_of_cycles {
+            let cycle_len = u64::from_le_bytes(input[25+i*8..33+i*8].try_into().unwrap()) as usize;
+            cycles_len.push(cycle_len);
+        }
+        let mut input = &input[25+number_of_cycles*8..];
+        let mut frames_cycle = Vec::new();
+        for i in 0..number_of_cycles{
+            let cycle_len = cycles_len[i];
+            let frame_cycle = FramesCycleStruct::new_with_input(pkt_type, &input[0..cycle_len]);
+            input = &input[cycle_len..];
+            frames_cycle.push(frame_cycle);
+        }
+
+        Self {
+            pkt_type,
+            send_timeout: Duration::from_millis(send_mili_secs),
+            recv_timeout: Duration::from_millis(recv_mili_secs),
+            packet_resort_type,
+            number_of_cycles,
+            cycles_len,
+            frames_cycle,
+        }
+    }
+    pub fn gen_frames(&self) -> Vec<frame::Frame> {
+        let mut frames = Vec::new();
+        match self.packet_resort_type {
+            pkt_resort_type::None => {
+                for frames_cycle in &self.frames_cycle {
+                    for _ in 0..frames_cycle.repeat_num {
+                        for frame in &frames_cycle.basic_frames {
+                            frames.push(frame.clone());
+                        }
+                    }
+                }
+            },
+            pkt_resort_type::Random => todo!(),
+            pkt_resort_type::Reverse => todo!(),
+            pkt_resort_type::Odd_even => todo!(),
+        }
+        frames
+    }
+    // 反向parse_struct_from_input序列化InputStruct结构体
+    /*
+    input{
+    pkt_type: u8
+    send_mili_secs: u64
+    recv_mili_secs: u64
+    packet_resort_type: u8
+    number_of_cycles: u64
+    cycles_len: [u64,number_of_cycles]
+    frames : [FramesCycleStruct, number_of_cycles]
+    FramesCycleStruct: {
+        repeat_num: u64,
+        basic_frames: [frame::Frame]
+    }
+     */
+    pub fn serialize(&self) -> Vec<u8> {
+        let mut res = Vec::new();
+        let pkt_type:u8 = match self.pkt_type {
+            packet::Type::Initial => 0,
+            packet::Type::Retry => 1,
+            packet::Type::Handshake => 2,
+            packet::Type::ZeroRTT => 3,
+            packet::Type::VersionNegotiation => 4,
+            packet::Type::Short => 5,
+        };
+        res.extend_from_slice(&pkt_type.to_le_bytes());
+        res.extend_from_slice(&(self.send_timeout.as_millis() as u64).to_le_bytes());
+        res.extend_from_slice(&(self.recv_timeout.as_millis() as u64).to_le_bytes());
+        let packet_resort_type:u8 = match self.packet_resort_type {
+            pkt_resort_type::None => 0,
+            pkt_resort_type::Random => 1,
+            pkt_resort_type::Reverse => 2,
+            pkt_resort_type::Odd_even => 3,
+        };
+        res.extend_from_slice(&packet_resort_type.to_le_bytes());
+        let num_of_cycles = self.frames_cycle.len() as u64;
+        res.extend_from_slice(&num_of_cycles.to_le_bytes());
+        let mut frames_cycle_bytes = Vec::new();
+        let mut current_framses_len:u64 =0;
+        for frame_cycle in self.frames_cycle.iter(){
+            frames_cycle_bytes.extend_from_slice(&(frame_cycle.repeat_num as u64).to_le_bytes());
+            for frame in &frame_cycle.basic_frames {
+                let mut d = Vec::new();
+                let mut b = octets::OctetsMut::with_slice(&mut d);
+                frame.to_bytes(& mut b);
+                frames_cycle_bytes.extend_from_slice(&d);
+            }
+            res.extend_from_slice(&(frames_cycle_bytes.len() as u64 - current_framses_len).to_le_bytes());
+            current_framses_len = frames_cycle_bytes.len() as u64;
+        }
+        res.extend_from_slice(&frames_cycle_bytes);
+        res
+    }
+}
 
 
 pub struct QuicStruct {
@@ -253,17 +485,31 @@ impl QuicStruct {
         config.enable_dgram(true, 1000, 1000);
 
         let mut keylog = None;
-    
-        if let Some(keylog_path) = std::env::var_os("SSLKEYLOGFILE") {
-            let file = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(keylog_path)
-                .unwrap();
-    
-            keylog = Some(file);
-    
-            config.log_keys();
+
+
+        match std::env::var_os("SSLKEYLOGFILE"){
+            Some(keylog_path) => {
+                let file = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(keylog_path)
+                    .unwrap();
+        
+                keylog = Some(file);
+        
+                config.log_keys();
+            },
+            None => {
+                let file = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("/home/john/Desktop/cjj_related/quic-go/example/key.log")
+                    .unwrap();
+        
+                keylog = Some(file);
+        
+                config.log_keys();
+            }
         }
 
         let mut app_proto_selected = false;
@@ -782,8 +1028,77 @@ impl QuicStruct {
                 };
 
                 // Process potentially coalesced packets.
+                // let recv_pid = conn.paths.path_id_from_addrs(&(recv_info.to, recv_info.from));
+                // let recv_path = conn.paths.get_mut(recv_pid.unwrap());
+                // println!("recv_path: {:?}", recv_path);
+                // let mut done = 0;
+                // let mut left = len;
+        
+                // // Process coalesced packets.
+                // while left > 0 {
+                //     let read = match conn.recv_single(
+                //         &mut buf[len - left..len],
+                //         &recv_info,
+                //         recv_pid,
+                //     ) {
+                //         Ok(v) => {
+                //             println!("recved bytes: {:?}", &buf[len - left..len]);
+                //             v
+                //         },
+        
+                //         Err(Error::Done) => {
+                //             // If the packet can't be processed or decrypted, check if
+                //             // it's a stateless reset.
+                //             if conn.is_stateless_reset(&buf[len - left..len]) {
+                //                 println!("{} packet is a stateless reset", conn.trace_id);
+        
+                //                 conn.mark_closed();
+                //             }
+        
+                //             left
+                //         },
+        
+                //         Err(e) => {
+                //             // In case of error processing the incoming packet, close
+                //             // the connection.
+                //             conn.close(false, e.to_wire(), b"").ok();
+                //             return Err(e.to_string());
+                //         },
+                //     };
+        
+                //     done += read;
+                //     left -= read;
+                // }
+                // conn.process_undecrypted_0rtt_packets();
+        
+
+
+
+                
                 let read = match conn.recv(&mut buf[..len], recv_info) {
-                    Ok(v) => v,
+                    Ok(v) => {
+                        println!("recved bytes: {:?}", &buf[..len]);
+                        let packet_info = buf[0];
+                        let version = &buf[1..5];
+                        // decode_pkt has a bug
+                        // match decode_pkt(conn, &mut buf[..len]){
+                        //     Ok(frames) => {
+                        //         if packet_info & 0x80 == 0x80 {
+                        //             println!("recved packet is a long packet");
+                        //             let dcid = buf[0..8].to_vec();
+                        //         }
+                        //         else{
+                        //             println!("recved packet is a short packet");
+                        //         }
+                        //         let dcid = buf[0..8].to_vec();
+                        //         println!("recved frames: {:?}", frames);
+                        //     },
+                        //     Err(e) => {
+                        //         println!("Failed to decode pkt: {:?}", e);
+                        //     }
+                        // }
+                        v
+                    },
 
                     Err(e) => {
                         println!("{}: recv failed: {:?}", local_addr, e);
@@ -1193,56 +1508,70 @@ where
             }
         }
         //conn 必然存在，直接发送数据
-        let binding = input.target_bytes();
-        let mut inputs = binding.as_slice();
-        // let frames = [
-        //     frame::Frame::PathChallenge {
-        //         data: [1, 2, 3, 4, 5, 6, 7, 8],
-        //     },
-        //     frame::Frame::Padding { len: (100) } ,
-        // ];
+        //测试:手动生成5000个path challenge帧 + Ping帧和2000个Padding帧
+        let mut input_struct = InputStruct::new();
+        input_struct = input_struct.set_pkt_type(packet::Type::Short).set_recv_timeout(200).set_send_timeout(20);
+        input_struct = input_struct.set_packet_resort_type(pkt_resort_type::None);
+        let mut frame_cycle1 = FramesCycleStruct::new();
+        frame_cycle1 = frame_cycle1.set_repeat_num(5000);
+        let pc_frame = frame::Frame::PathChallenge {
+            data: [1, 2, 3, 4, 5, 6, 7, 8],
+        };
+        let ping_frame = frame::Frame::Ping { mtu_probe: Some(0) };
+        frame_cycle1 = frame_cycle1.add_frame(pc_frame);
+        frame_cycle1 = frame_cycle1.add_frame(ping_frame);
+
+        let mut frame_cycle2 = FramesCycleStruct::new();
+        frame_cycle2 = frame_cycle2.set_repeat_num(2000);
+        let pad_frame = frame::Frame::Padding { len: (100) };
+        frame_cycle2 = frame_cycle2.add_frame(pad_frame);
+        input_struct = input_struct.add_frames_cycle(frame_cycle1);
+        input_struct = input_struct.add_frames_cycle(frame_cycle2);
+        input_struct = input_struct.calc_frames_cycle_len();
+
+
+        //通过input 生成frames
+        // let binding = input.target_bytes();
+        // let mut inputs = binding.as_slice();        
+        // let mut input_struct = InputStruct::new();
+        // input_struct = input_struct.parse_struct_from_input(inputs);
+
+        let pkt_type = input_struct.pkt_type;
+        let lost_time_dur = input_struct.send_timeout;
+        let recv_time = input_struct.recv_timeout.as_millis();
+        let mut recv_left_time = recv_time;
+        let frames = input_struct.gen_frames();
         
-        let pkt_type = packet::Type::Short;
-        let mut b = octets::Octets::with_slice(inputs);
-        match frame::Frame::from_bytes(& mut b, pkt_type){
-            Ok(frame) => {
-                let frames = [frame];
-                println!("sending frame: {:?}", frames);
-                //send forged packet
-                quic_st.send_pkt_to_server(pkt_type, &frames, &mut out);
-            },
-            Err(e) => {
-                eprintln!("Failed to forge packet: {:?}", e);
-                //exit_kind = ExitKind::Crash;
+
+        for frame in frames.iter() {
+            println!("sending frame: {:?}", frame);
+            let  frame_list = [frame.clone()];
+            quic_st.send_pkt_to_server(pkt_type, &frame_list, &mut out);
+            match quic_st.handle_sending(){
+                Err(e) => {
+                    eprintln!("Failed to send data: {:?}", e);
+                    exit_kind = ExitKind::Crash;
+                },
+                Ok(_) => (),
             }
-        
+            sleep(lost_time_dur);
+            println!("recv_left_time: {:?},lost_time: {:?}", recv_left_time,lost_time_dur.as_millis());
+            if recv_left_time < lost_time_dur.as_millis() {
+                recv_left_time =  recv_time;
+                //recv&handle conn's received packet 
+                match quic_st.handle_recving(){
+                    Err(e) => {
+                        eprintln!("Failed to recv data: {:?}", e);
+                        exit_kind = ExitKind::Crash;
+                    },
+                    Ok(_) => (),
+                }
+            }
+            else {
+                recv_left_time -= lost_time_dur.as_millis();
+            }
+
         }
-
-
-        //send forged packet
-        // quic_st.send_pkt_to_server(pkt_type, &frames, &mut out);
-        
-        //clear conn's sending buffer
-        match quic_st.handle_sending(){
-            Err(e) => {
-                eprintln!("Failed to send data: {:?}", e);
-                exit_kind = ExitKind::Crash;
-            },
-            Ok(_) => (),
-        }
-
-        //recv&handle conn's received packet 
-        match quic_st.handle_recving(){
-            Err(e) => {
-                eprintln!("Failed to recv data: {:?}", e);
-                exit_kind = ExitKind::Crash;
-            },
-            Ok(_) => (),
-        }
-
-        //let mut conn = quic_st.conn.as_mut().unwrap();
-
-
 
         let res = self.judge_server_status();
         if res == 0 {
