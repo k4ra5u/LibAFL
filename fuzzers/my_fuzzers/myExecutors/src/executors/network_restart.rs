@@ -2,7 +2,7 @@ use std::{
     any::Any, env, ffi::{OsStr, OsString}, io::{self, prelude::*, ErrorKind, Read, Write}, os::{
         fd::{AsRawFd, BorrowedFd},
         unix::{io::RawFd, process::CommandExt},
-    }, path::Path, process::{Child, Command, Output, Stdio}, str, thread::sleep, time::Duration
+    }, path::Path, process::{Child, Command, Output, Stdio}, str, thread::sleep, time::Duration, vec
 };
 use std::num::ParseIntError;
 use libc::ERA;
@@ -28,13 +28,12 @@ use libafl::{
     }
 };
 use libafl_bolts::{
-    tuples::{Handle, Handled,MatchName ,MatchNameRef, Prepend, RefIndexable},
-    shmem::{ShMem, ShMemProvider, UnixShMemProvider},
-    AsSlice, AsSliceMut, Truncate,
+    rands, shmem::{ShMem, ShMemProvider, UnixShMemProvider}, tuples::{Handle, Handled,MatchName ,MatchNameRef, Prepend, RefIndexable}, AsSlice, AsSliceMut, Truncate
 };
+use rand::Rng;
 use std::net::{SocketAddr, ToSocketAddrs};
 use ring::rand::*;
-use log::{error, info,debug};
+use log::{error, info,debug,warn};
 
 use quiche::{frame, packet, Connection, ConnectionId, Error, Header};
 const MAX_DATAGRAM_SIZE: usize = 1350;
@@ -197,7 +196,7 @@ impl FramesCycleStruct {
             let frame = frame::Frame::from_bytes(&mut octets_input, pkt_type).unwrap();
             // left -= frame.wire_len();
             left = octets_input.len();
-            println!("frame: {:?}", frame);
+            info!("frame: {:?}", frame);
             basic_frames.push(frame);
             
         }
@@ -322,15 +321,398 @@ impl InputStruct {
     }
     pub fn gen_frames(&self) -> Vec<frame::Frame> {
         let mut frames = Vec::new();
-        match self.packet_resort_type {
-            pkt_resort_type::None => {
-                for frames_cycle in &self.frames_cycle {
-                    for _ in 0..frames_cycle.repeat_num {
-                        for frame in &frames_cycle.basic_frames {
-                            frames.push(frame.clone());
+        for frames_cycle in &self.frames_cycle {
+            for frame in &frames_cycle.basic_frames {
+                //default: 由于上层已经打乱了次序，这里每个cycle只有一个frame，方便对frame进行操作
+                //对于每种frame设计不同的操作
+                match frame {
+                    frame::Frame::Padding {
+                        len,
+                    } => {
+                        for _ in 0..frames_cycle.repeat_num {
+                            frames.push(frame::Frame::Padding {
+                                len: *len,
+                             });
+                        }
+                    },
+                    frame::Frame::Ping {
+                        mtu_probe: mtu_probe,
+                    }  => {
+                        match *mtu_probe {
+                            Some(mtu_probe) => {
+                                let mut mutated_mtu_probe = mtu_probe ;
+                                let mut rng = rand::thread_rng();
+                                for _ in 0..frames_cycle.repeat_num {
+                                    mutated_mtu_probe = rng.gen_range(0..=1500);
+                                    frames.push(frame::Frame::Ping {
+                                        mtu_probe: Some(mutated_mtu_probe),
+                                    });
+                                }
+                            },
+                            None => {
+                                for _ in 0..frames_cycle.repeat_num {
+                                    frames.push(frame::Frame::Ping {
+                                        mtu_probe: None,
+                                    })
+                                }
+                            },
+                        }
+
+                    },
+                    frame::Frame::ACK {
+                        ack_delay,
+                        ranges,
+                        ecn_counts,
+                    } => {
+
+                        let mut mutated_ack_delay = ack_delay;
+                        let mut mutated_ranges = ranges.clone();
+                        let mut mutated_ecn_counts = ecn_counts.clone();
+                        for _ in 0..frames_cycle.repeat_num {
+                            mutated_ack_delay = ack_delay;
+                            mutated_ranges = ranges.clone();
+                            mutated_ecn_counts = ecn_counts.clone();
+                            frames.push(frame::Frame::ACK {
+                                ack_delay: *mutated_ack_delay,
+                                ranges: mutated_ranges,
+                                ecn_counts: mutated_ecn_counts,
+                            });
+                        }
+                    },
+                    frame::Frame::ResetStream {
+                        stream_id,
+                        error_code,
+                        final_size,
+                    } => {
+                        let mut mutated_stream_id = *stream_id;
+                        let mut mutated_error_code = *error_code;
+                        let mut mutated_final_size = *final_size;
+                        for _ in 0..frames_cycle.repeat_num {
+                            mutated_stream_id = *stream_id + 1;
+                            mutated_error_code = *error_code + 1;
+                            mutated_final_size = *final_size + 1;
+                            frames.push(frame::Frame::ResetStream {
+                                stream_id: mutated_stream_id,
+                                error_code: mutated_error_code,
+                                final_size: mutated_final_size,
+                            });
+                        }
+                    },
+                    frame::Frame::StopSending {
+                        stream_id,
+                        error_code,
+                    } => {
+                        let mut mutated_stream_id = *stream_id;
+                        let mut mutated_error_code = *error_code;
+                        for _ in 0..frames_cycle.repeat_num {
+                            mutated_stream_id = *stream_id + 1;
+                            mutated_error_code = *error_code + 1;
+                            frames.push(frame::Frame::StopSending {
+                                stream_id: mutated_stream_id,
+                                error_code: mutated_error_code,
+                            });
+                        }
+                    },
+                    frame::Frame::Crypto {
+                        data,
+                    } => {
+                        let mut mutated_data = data.clone();
+                        for _ in 0..frames_cycle.repeat_num {
+                            mutated_data = data.clone();
+                            frames.push(frame::Frame::Crypto {
+                                data: mutated_data,
+                            });
+                        }
+                    },
+                    frame::Frame::CryptoHeader { 
+                        offset, 
+                        length 
+                    } => {
+                        let mut mutated_offset = *offset;
+                        let mut mutated_length = *length;
+                        for _ in 0..frames_cycle.repeat_num {
+                            mutated_offset = *offset + 1;
+                            mutated_length = *length + 1;
+                            frames.push(frame::Frame::CryptoHeader {
+                                offset: mutated_offset,
+                                length: mutated_length,
+                            });
+                        }
+                    },
+                    frame::Frame::NewToken {
+                        token,
+                    } => {
+                        let mut mutated_token = token.clone();
+                        for _ in 0..frames_cycle.repeat_num {
+                            mutated_token = token.clone();
+                            frames.push(frame::Frame::NewToken {
+                                token: mutated_token,
+                            });
+                        }
+                    },
+                    frame::Frame::Stream {
+                        stream_id,
+                        data,
+                    } => {
+                        let mut mutated_stream_id = *stream_id;
+                        let mut mutated_data = data.clone();
+                        for _ in 0..frames_cycle.repeat_num {
+                            mutated_stream_id = *stream_id + 1;
+                            mutated_data = data.clone();
+                            frames.push(frame::Frame::Stream {
+                                stream_id: mutated_stream_id,
+                                data: mutated_data,
+                            });
+                        }
+                    },
+                    frame::Frame::StreamHeader { 
+                        stream_id, 
+                        offset, 
+                        length ,
+                        fin,
+                    } => {
+                        let mut mutated_stream_id = *stream_id;
+                        let mut mutated_offset = *offset;
+                        let mut mutated_length = *length;
+                        let mut mutated_fin = *fin;
+                        for _ in 0..frames_cycle.repeat_num {
+                            mutated_stream_id = *stream_id + 1;
+                            mutated_offset = *offset + 1;
+                            mutated_length = *length + 1;
+                            mutated_fin = *fin;
+                            frames.push(frame::Frame::StreamHeader {
+                                stream_id: mutated_stream_id,
+                                offset: mutated_offset,
+                                length: mutated_length,
+                                fin: mutated_fin,
+                            });
+                        }
+                    },
+                    frame::Frame::MaxData {
+                        max,
+                    } => {
+                        let mut mutated_max = *max;
+                        for _ in 0..frames_cycle.repeat_num {
+                            mutated_max = *max + 1;
+                            frames.push(frame::Frame::MaxData {
+                                max: mutated_max,
+                            });
+                        }
+                    },
+                    frame::Frame::MaxStreamData {
+                        stream_id,
+                        max,
+                    } => {
+                        let mut mutated_stream_id = *stream_id;
+                        let mut mutated_max = *max;
+                        for _ in 0..frames_cycle.repeat_num {
+                            mutated_stream_id = *stream_id + 1;
+                            mutated_max = *max + 1;
+                            frames.push(frame::Frame::MaxStreamData {
+                                stream_id: mutated_stream_id,
+                                max: mutated_max,
+                            });
+                        }
+                    },
+                    frame::Frame::MaxStreamsBidi {
+                        max,
+                    } => {
+                        let mut mutated_max = *max;
+                        for _ in 0..frames_cycle.repeat_num {
+                            mutated_max = *max + 1;
+                            frames.push(frame::Frame::MaxStreamsBidi {
+                                max: mutated_max,
+                            });
+                        }
+                    },
+                    frame::Frame::MaxStreamsUni {
+                        max,
+                    } => {
+                        let mut mutated_max = *max;
+                        for _ in 0..frames_cycle.repeat_num {
+                            mutated_max = *max + 1;
+                            frames.push(frame::Frame::MaxStreamsUni {
+                                max: mutated_max,
+                            });
+                        }
+                    },
+                    frame::Frame::DataBlocked {
+                        limit,
+                    } => {
+                        let mut mutated_limit = *limit;
+                        for _ in 0..frames_cycle.repeat_num {
+                            mutated_limit = *limit + 1;
+                            frames.push(frame::Frame::DataBlocked {
+                                limit: mutated_limit,
+                            });
+                        }
+                    },
+                    frame::Frame::StreamDataBlocked {
+                        stream_id,
+                        limit,
+                    } => {
+                        let mut mutated_stream_id = *stream_id;
+                        let mut mutated_limit = *limit;
+                        for _ in 0..frames_cycle.repeat_num {
+                            mutated_stream_id = *stream_id + 1;
+                            mutated_limit = *limit + 1;
+                            frames.push(frame::Frame::StreamDataBlocked {
+                                stream_id: mutated_stream_id,
+                                limit: mutated_limit,
+                            });
+                        }
+                    },
+                    frame::Frame::StreamsBlockedBidi { 
+                        limit 
+                    } => {
+                        let mut mutated_limit = *limit;
+                        for _ in 0..frames_cycle.repeat_num {
+                            mutated_limit = *limit + 1;
+                            frames.push(frame::Frame::StreamsBlockedBidi {
+                                limit: mutated_limit,
+                            });
+                        }
+                    },
+                    frame::Frame::StreamsBlockedUni { 
+                        limit 
+                    } => {
+                        let mut mutated_limit = *limit;
+                        for _ in 0..frames_cycle.repeat_num {
+                            mutated_limit = *limit + 1;
+                            frames.push(frame::Frame::StreamsBlockedUni {
+                                limit: mutated_limit,
+                            });
+                        }
+                    },
+
+                    frame::Frame::NewConnectionId {
+                        seq_num,
+                        retire_prior_to,
+                        conn_id ,
+                        reset_token,
+                    } => {
+                        let mut mutated_seq = *seq_num;
+                        let mut mutated_retire_prior_to = *retire_prior_to;
+                        let mut mutated_cid = [0 as u8;quiche::MAX_CONN_ID_LEN];
+                        let mut mutated_reset_token = reset_token.clone();
+                        for i in 0..frames_cycle.repeat_num {
+                            mutated_seq = *seq_num + i as u64;
+                            mutated_retire_prior_to = *retire_prior_to+ i as u64;
+                            
+                            SystemRandom::new().fill( & mut mutated_cid[..]).unwrap();
+
+                            mutated_reset_token = reset_token.clone();
+                            frames.push(frame::Frame::NewConnectionId {
+                                seq_num: mutated_seq,
+                                retire_prior_to: mutated_retire_prior_to,
+                                conn_id: mutated_cid.to_vec(),
+                                reset_token: mutated_reset_token,
+                            });
+                        }
+                    },
+                    frame::Frame::RetireConnectionId {
+                        seq_num,
+                    } => {
+                        let mut mutated_seq = *seq_num;
+                        for _ in 0..frames_cycle.repeat_num {
+                            mutated_seq = *seq_num + 1;
+                            frames.push(frame::Frame::RetireConnectionId {
+                                seq_num: mutated_seq,
+                            });
+                        }
+                    },
+                    frame::Frame::PathChallenge {
+                        data,
+                    } => {
+                        let mut mutated_data = data.clone();
+                        for _ in 0..frames_cycle.repeat_num {
+                            mutated_data = data.clone();
+                            frames.push(frame::Frame::PathChallenge {
+                                data: mutated_data,
+                            });
+                        }
+                    },
+                    frame::Frame::PathResponse {
+                        data,
+                    } => {
+                        let mut mutated_data = data.clone();
+                        for _ in 0..frames_cycle.repeat_num {
+                            mutated_data = data.clone();
+                            frames.push(frame::Frame::PathResponse {
+                                data: mutated_data,
+                            });
+                        }
+                    },
+                    frame::Frame::ConnectionClose {
+                        error_code,
+                        frame_type,
+                        reason,
+                    } => {
+                        let mut mutated_error_code = *error_code;
+                        let mut mutated_frame_type = *frame_type;
+                        let mut mutated_reason = reason.clone();
+                        for _ in 0..frames_cycle.repeat_num {
+                            mutated_error_code = *error_code + 1;
+                            mutated_frame_type = *frame_type + 1;
+                            mutated_reason = reason.clone();
+                            frames.push(frame::Frame::ConnectionClose {
+                                error_code: mutated_error_code,
+                                frame_type: mutated_frame_type,
+                                reason: mutated_reason,
+                            });
+                        }
+                    },
+                    frame::Frame::ApplicationClose { 
+                        error_code,
+                        reason,
+                    } => {
+                        let mut mutated_err_code = *error_code;
+                        let mut mutated_reason = reason.clone();
+                        for _ in 0..frames_cycle.repeat_num {
+                            mutated_err_code = *error_code +1;
+                            mutated_reason = reason.clone();
+                            frames.push(frame::Frame::ApplicationClose { 
+                                error_code: mutated_err_code,
+                                reason: mutated_reason 
+                            });
                         }
                     }
+                    frame::Frame::HandshakeDone => {
+                        for _ in 0..frames_cycle.repeat_num {
+                            frames.push(frame.clone());
+                        }
+                    },
+                    frame::Frame::Datagram {
+                        data,
+                    } => {
+                        let mut mutated_data = data.clone();
+                        for _ in 0..frames_cycle.repeat_num {
+                            mutated_data = data.clone();
+                            frames.push(frame::Frame::Datagram {
+                                data: mutated_data,
+                            });
+                        }
+                    },
+                    frame::Frame::DatagramHeader { 
+                        length 
+                    } => {
+                        let mut mutated_length = *length;
+                        for _ in 0..frames_cycle.repeat_num {
+                            mutated_length = *length + 1;
+                            frames.push(frame::Frame::DatagramHeader {
+                                length: mutated_length,
+                            });
+                        }
+                    },
+
+
+
                 }
+            }
+        }
+
+        match self.packet_resort_type {
+            pkt_resort_type::None => {
             },
             pkt_resort_type::Random => todo!(),
             pkt_resort_type::Reverse => todo!(),
@@ -581,7 +963,7 @@ impl QuicStruct {
         //     }
         // }
     
-        println!(
+        debug!(
             "connecting to {:} from {:} with scid {:?}",
             self.peer_addr,
             self.socket.local_addr().unwrap(),
@@ -592,7 +974,7 @@ impl QuicStruct {
     
         while let Err(e) = self.socket.send_to(&out[..write], send_info.to) {
             if e.kind() == std::io::ErrorKind::WouldBlock {
-                println!(
+                debug!(
                     "{} -> {}: send() would block",
                     self.socket.local_addr().unwrap(),
                     send_info.to
@@ -603,7 +985,7 @@ impl QuicStruct {
             return Err(format!("send() failed: {e:?}"));
         }
     
-        println!("written {}", write);
+        debug!("written {}", write);
     
         let app_data_start = std::time::Instant::now();
     
@@ -623,7 +1005,7 @@ impl QuicStruct {
             // has expired, so handle it without attempting to read packets. We
             // will then proceed with the send loop.
             if self.events.is_empty() {
-                println!("timed out");
+                debug!("timed out");
     
                 conn.on_timeout();
             }
@@ -648,7 +1030,7 @@ impl QuicStruct {
                             // There are no more UDP packets to read on this socket.
                             // Process subsequent events.
                             if e.kind() == std::io::ErrorKind::WouldBlock {
-                                println!("{}: recv() would block", local_addr);
+                                debug!("{}: recv() would block", local_addr);
                                 break 'read;
                             }
     
@@ -658,7 +1040,7 @@ impl QuicStruct {
                         },
                     };
     
-                    println!("{}: got {} bytes", local_addr, len);
+                    debug!("{}: got {} bytes", local_addr, len);
     
                     // if let Some(target_path) = conn_args.dump_packet_path.as_ref() {
                     //     let path = format!("{target_path}/{pkt_count}.pkt");
@@ -681,26 +1063,26 @@ impl QuicStruct {
                         Ok(v) => v,
     
                         Err(e) => {
-                            println!("{}: recv failed: {:?}", local_addr, e);
+                            debug!("{}: recv failed: {:?}", local_addr, e);
                             continue 'read;
                         },
                     };
     
-                    println!("{}: processed {} bytes", local_addr, read);
+                    debug!("{}: processed {} bytes", local_addr, read);
                 }
             }
     
-            println!("done reading");
+            debug!("done reading");
     
             if conn.is_closed() {
-                println!(
+                warn!(
                     "connection closed, {:?} {:?}",
                     conn.stats(),
                     conn.path_stats().collect::<Vec<quiche::PathStats>>()
                 );
     
                 if !conn.is_established() {
-                    println!(
+                    warn!(
                         "connection timed out after {:?}",
                         app_data_start.elapsed(),
                     );
@@ -725,14 +1107,14 @@ impl QuicStruct {
             if (conn.is_established() || conn.is_in_early_data())
             {
                 finished = true;
-                println!("connection established");
+                debug!("connection established");
 
                 if let Err(e) = conn.stream_send(0, b"aaaaaaaaaaaaaaaa", false) {        
                     return Err(format!("Failed to send data: {:?}", e));
                 }
                 //break;
             }
-            println!("connection not established yet, but breaked");
+            debug!("connection not established yet, but breaked");
     
 
     
@@ -742,7 +1124,7 @@ impl QuicStruct {
                     quiche::PathEvent::New(..) => unreachable!(),
     
                     quiche::PathEvent::Validated(local_addr, peer_addr) => {
-                        println!(
+                        debug!(
                             "Path ({}, {}) is now validated",
                             local_addr, peer_addr
                         );
@@ -751,14 +1133,14 @@ impl QuicStruct {
                     },
     
                     quiche::PathEvent::FailedValidation(local_addr, peer_addr) => {
-                        println!(
+                        debug!(
                             "Path ({}, {}) failed validation",
                             local_addr, peer_addr
                         );
                     },
     
                     quiche::PathEvent::Closed(local_addr, peer_addr) => {
-                        println!(
+                        debug!(
                             "Path ({}, {}) is now closed and unusable",
                             local_addr, peer_addr
                         );
@@ -769,7 +1151,7 @@ impl QuicStruct {
                         old,
                         new,
                     ) => {
-                        println!(
+                        debug!(
                             "Peer reused cid seq {} (initially {:?}) on {:?}",
                             cid_seq, old, new
                         );
@@ -781,7 +1163,7 @@ impl QuicStruct {
     
             // // See whether source Connection IDs have been retired.
             while let Some(retired_scid) = conn.retired_scid_next() {
-                println!("Retiring source CID {:?}", retired_scid);
+                debug!("Retiring source CID {:?}", retired_scid);
             }
     
 
@@ -813,7 +1195,7 @@ impl QuicStruct {
                             Ok(v) => v,
     
                             Err(quiche::Error::Done) => {
-                                println!(
+                                debug!(
                                     "{} -> {}: done writing",
                                     local_addr,
                                     peer_addr
@@ -822,7 +1204,7 @@ impl QuicStruct {
                             },
     
                             Err(e) => {
-                                println!(
+                                debug!(
                                     "{} -> {}: send failed: {:?}",
                                     local_addr, peer_addr, e
                                 );
@@ -842,7 +1224,7 @@ impl QuicStruct {
     
                         if let Err(e) = socket.send_to(&out[..write], send_info.to) {
                             if e.kind() == std::io::ErrorKind::WouldBlock {
-                                println!(
+                                debug!(
                                     "{} -> {}: send() would block",
                                     local_addr,
                                     send_info.to
@@ -853,7 +1235,7 @@ impl QuicStruct {
                             return Err(format!("{} -> {}: send() failed: {:?}",local_addr, send_info.to, e));
                         }
     
-                        println!(
+                        debug!(
                             "{} -> {}: written {}",
                             local_addr,
                             send_info.to,
@@ -863,14 +1245,14 @@ impl QuicStruct {
                 }
             } 
             if conn.is_closed() {
-                println!(
+                warn!(
                     "connection closed, {:?} {:?}",
                     conn.stats(),
                     conn.path_stats().collect::<Vec<quiche::PathStats>>()
                 );
     
                 if !conn.is_established() {
-                    println!(
+                    warn!(
                         "connection timed out after {:?}",
                         app_data_start.elapsed(),
                     );
@@ -923,7 +1305,7 @@ impl QuicStruct {
                         Ok(v) => v,
 
                         Err(quiche::Error::Done) => {
-                            println!(
+                            debug!(
                                 "{} -> {}: done writing",
                                 local_addr,
                                 peer_addr
@@ -932,7 +1314,7 @@ impl QuicStruct {
                         },
 
                         Err(e) => {
-                            println!(
+                            debug!(
                                 "{} -> {}: send failed: {:?}",
                                 local_addr, peer_addr, e
                             );
@@ -952,7 +1334,7 @@ impl QuicStruct {
 
                     if let Err(e) = socket.send_to(&out[..write], send_info.to) {
                         if e.kind() == std::io::ErrorKind::WouldBlock {
-                            println!(
+                            debug!(
                                 "{} -> {}: send() would block",
                                 local_addr,
                                 send_info.to
@@ -963,7 +1345,7 @@ impl QuicStruct {
                         return Err(format!("{} -> {}: send() failed: {:?}",local_addr, send_info.to, e));
                     }
 
-                    println!(
+                    debug!(
                         "{} -> {}: written {}",
                         local_addr,
                         send_info.to,
@@ -1000,7 +1382,7 @@ impl QuicStruct {
                         // There are no more UDP packets to read on this socket.
                         // Process subsequent events.
                         if e.kind() == std::io::ErrorKind::WouldBlock {
-                            println!("{}: recv() would block", local_addr);
+                            debug!("{}: recv() would block", local_addr);
                             break 'read;
                         }
 
@@ -1010,7 +1392,7 @@ impl QuicStruct {
                     },
                 };
 
-                println!("{}: got {} bytes", local_addr, len);
+                debug!("{}: got {} bytes", local_addr, len);
 
                 // if let Some(target_path) = conn_args.dump_packet_path.as_ref() {
                 //     let path = format!("{target_path}/{pkt_count}.pkt");
@@ -1077,7 +1459,7 @@ impl QuicStruct {
                 
                 let read = match conn.recv(&mut buf[..len], recv_info) {
                     Ok(v) => {
-                        println!("recved bytes: {:?}", &buf[..len]);
+                        debug!("recved bytes: {:?}", &buf[..len]);
                         let packet_info = buf[0];
                         let version = &buf[1..5];
                         // decode_pkt has a bug
@@ -1101,16 +1483,96 @@ impl QuicStruct {
                     },
 
                     Err(e) => {
-                        println!("{}: recv failed: {:?}", local_addr, e);
+                        debug!("{}: recv failed: {:?}", local_addr, e);
                         continue 'read;
                     },
                 };
 
-                println!("{}: processed {} bytes", local_addr, read);
+                debug!("{}: processed {} bytes", local_addr, read);
             }
         }
 
-        println!("done reading");
+        debug!("done reading");
+        Ok(())
+    }
+
+
+    pub fn handle_recving_once(&mut self) -> Result<(), String>{
+        let mut out = [0; MAX_DATAGRAM_SIZE];
+        let mut buf = [0; 65535];
+
+        // sockets.push(&self.migrate_socket);
+        let mut conn = self.conn.as_mut().unwrap();
+
+        for event in &self.events {
+            let socket = match event.token() {
+                mio::Token(0) => &self.socket,
+
+                mio::Token(1) => &self.migrate_socket,
+
+                _ => unreachable!(),
+            };
+
+            let local_addr = socket.local_addr().unwrap();
+            let (len, from) = match socket.recv_from(&mut buf) {
+                Ok(v) => v,
+
+                Err(e) => {
+                    // There are no more UDP packets to read on this socket.
+                    // Process subsequent events.
+                    if e.kind() == std::io::ErrorKind::WouldBlock {
+                        debug!("{}: recv() would block", local_addr);
+                        return Ok(());
+                    }
+
+                    return Err(format!(
+                        "{local_addr}: recv() failed: {e:?}"
+                    ));
+                },
+            };
+
+            debug!("{}: got {} bytes", local_addr, len);
+
+            let recv_info = quiche::RecvInfo {
+                to: local_addr,
+                from,
+            };
+            
+            let read = match conn.recv(&mut buf[..len], recv_info) {
+                Ok(v) => {
+                    debug!("recved bytes: {:?}", &buf[..len]);
+                    let packet_info = buf[0];
+                    let version = &buf[1..5];
+                    // decode_pkt has a bug
+                    // match decode_pkt(conn, &mut buf[..len]){
+                    //     Ok(frames) => {
+                    //         if packet_info & 0x80 == 0x80 {
+                    //             println!("recved packet is a long packet");
+                    //             let dcid = buf[0..8].to_vec();
+                    //         }
+                    //         else{
+                    //             println!("recved packet is a short packet");
+                    //         }
+                    //         let dcid = buf[0..8].to_vec();
+                    //         println!("recved frames: {:?}", frames);
+                    //     },
+                    //     Err(e) => {
+                    //         println!("Failed to decode pkt: {:?}", e);
+                    //     }
+                    // }
+                    v
+                },
+
+                Err(e) => {
+                    debug!("{}: recv failed: {:?}", local_addr, e);
+                    return Err(format!("{}: recv failed: {:?}", local_addr, e));
+                },
+            };
+
+            debug!("{}: processed {} bytes", local_addr, read);
+        }
+
+        debug!("done reading");
         Ok(())
     }
 
@@ -1119,7 +1581,7 @@ impl QuicStruct {
         let active_path = conn.paths.get_active()?;
         while let Err(e) = self.socket.send_to(&buf[..len], self.peer_addr) {
             if e.kind() == std::io::ErrorKind::WouldBlock {
-                println!(
+                debug!(
                     "{} -> {}: send() would block",
                     self.socket.local_addr().unwrap(),
                     self.peer_addr
@@ -1136,17 +1598,17 @@ impl QuicStruct {
         &mut self, pkt_type: packet::Type, frames: &[frame::Frame],
         buf: &mut [u8],
     ) -> Result<usize,Error> {
-        println!("sending frames: {:?}", frames);
+        info!("sending frames: {:?}", frames);
         let conn = self.conn.as_mut().unwrap();
         match encode_pkt(conn, pkt_type, frames, buf)
         {
             Ok(written) => {
-                println!("sending {} bytes to server: {:?}",written, &buf[..written]);
+                debug!("sending {} bytes to server: {:?}",written, &buf[..written]);
                 self.send_buf( buf, written)
             },
             Err(e) => 
             {
-                println!("Failed to encode pkt: {:?}", e);
+                debug!("Failed to encode pkt: {:?}", e);
                 Err(e)
             }
         }
@@ -1417,7 +1879,7 @@ where
         input: &Self::Input,
     ) -> Result<libafl::prelude::ExitKind, libafl::prelude::Error> {
 
-        let mut out = [0; MAX_DATAGRAM_SIZE<<1];
+        let mut out = [0; MAX_DATAGRAM_SIZE<<10];
         let mut exit_kind = ExitKind::Ok;
         *state.executions_mut() += 1;
         for (key, value) in &self.envs {
@@ -1510,23 +1972,29 @@ where
         //conn 必然存在，直接发送数据
         //测试:手动生成5000个path challenge帧 + Ping帧和2000个Padding帧
         let mut input_struct = InputStruct::new();
-        input_struct = input_struct.set_pkt_type(packet::Type::Short).set_recv_timeout(200).set_send_timeout(20);
+        input_struct = input_struct.set_pkt_type(packet::Type::Short).set_recv_timeout(100).set_send_timeout(5);
         input_struct = input_struct.set_packet_resort_type(pkt_resort_type::None);
         let mut frame_cycle1 = FramesCycleStruct::new();
-        frame_cycle1 = frame_cycle1.set_repeat_num(5000);
-        let pc_frame = frame::Frame::PathChallenge {
-            data: [1, 2, 3, 4, 5, 6, 7, 8],
+        frame_cycle1 = frame_cycle1.set_repeat_num(500000);
+        // let pc_frame = frame::Frame::PathChallenge {
+        //     data: [1, 2, 3, 4, 5, 6, 7, 8],
+        // };
+        let nci_frame = frame::Frame::NewConnectionId {
+            seq_num: 2,
+            retire_prior_to:2,
+            conn_id: vec![1, 2, 3, 4, 5, 6, 7, 8],
+            reset_token: [100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115],
         };
-        let ping_frame = frame::Frame::Ping { mtu_probe: Some(0) };
-        frame_cycle1 = frame_cycle1.add_frame(pc_frame);
-        frame_cycle1 = frame_cycle1.add_frame(ping_frame);
+        //let ping_frame = frame::Frame::Ping { mtu_probe: Some(0) };
+        //frame_cycle1 = frame_cycle1.add_frame(pc_frame);
+        frame_cycle1 = frame_cycle1.add_frame(nci_frame);
 
-        let mut frame_cycle2 = FramesCycleStruct::new();
-        frame_cycle2 = frame_cycle2.set_repeat_num(2000);
-        let pad_frame = frame::Frame::Padding { len: (100) };
-        frame_cycle2 = frame_cycle2.add_frame(pad_frame);
+        // let mut frame_cycle2 = FramesCycleStruct::new();
+        // frame_cycle2 = frame_cycle2.set_repeat_num(200);
+        // let pad_frame = frame::Frame::Padding { len: (100) };
+        // frame_cycle2 = frame_cycle2.add_frame(pad_frame);
         input_struct = input_struct.add_frames_cycle(frame_cycle1);
-        input_struct = input_struct.add_frames_cycle(frame_cycle2);
+        // input_struct = input_struct.add_frames_cycle(frame_cycle2);
         input_struct = input_struct.calc_frames_cycle_len();
 
 
@@ -1542,10 +2010,22 @@ where
         let mut recv_left_time = recv_time;
         let frames = input_struct.gen_frames();
         
-
+        let max_pkt_len = 1200;
+        let mut cur_pkt_len = 0;
+        let mut total_sent_frames = 0;
+        let mut frame_list: Vec<frame::Frame> = Vec::new();
+        let mut buffer = [0u8; 1200];
         for frame in frames.iter() {
-            println!("sending frame: {:?}", frame);
-            let  frame_list = [frame.clone()];
+            debug!("frame len: {:?}", frame.wire_len());
+            if cur_pkt_len + frame.wire_len() < max_pkt_len {
+                frame_list.push(frame.clone());
+                cur_pkt_len += frame.wire_len();
+                total_sent_frames += 1;
+                debug!("sending frame: {:?}", frame);
+                continue;
+            }
+            
+
             quic_st.send_pkt_to_server(pkt_type, &frame_list, &mut out);
             match quic_st.handle_sending(){
                 Err(e) => {
@@ -1554,22 +2034,30 @@ where
                 },
                 Ok(_) => (),
             }
-            sleep(lost_time_dur);
-            println!("recv_left_time: {:?},lost_time: {:?}", recv_left_time,lost_time_dur.as_millis());
-            if recv_left_time < lost_time_dur.as_millis() {
-                recv_left_time =  recv_time;
+            warn!("total sent frames: {:?}, all: {:?}", total_sent_frames, frames.len());
+            if recv_left_time <= lost_time_dur.as_millis() {
+                let send_left_time = lost_time_dur.as_millis() - recv_left_time;
+                sleep(Duration::from_millis(recv_left_time.try_into().unwrap()));
+                recv_left_time =  recv_time - send_left_time ;
                 //recv&handle conn's received packet 
-                match quic_st.handle_recving(){
+                match quic_st.handle_recving_once(){
                     Err(e) => {
                         eprintln!("Failed to recv data: {:?}", e);
                         exit_kind = ExitKind::Crash;
                     },
                     Ok(_) => (),
                 }
+                sleep(Duration::from_millis( send_left_time as u64));
+
             }
             else {
+                sleep(lost_time_dur);
                 recv_left_time -= lost_time_dur.as_millis();
-            }
+            } 
+            info!("recv_left_time: {:?},lost_time: {:?}", recv_left_time,lost_time_dur.as_millis());
+            cur_pkt_len = frame.wire_len();
+            frame_list.clear();
+            frame_list.push(frame.clone());
 
         }
 

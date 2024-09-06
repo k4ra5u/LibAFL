@@ -83,6 +83,7 @@ struct Opt {
 static mut SHMEM_EDGE_MAP: Option<UnixShMem> = None;
 
 pub fn main() {
+    std::env::set_var("RUST_LOG", "warn");
     env_logger::init();
     const MAP_SIZE: usize = 65536;
 
