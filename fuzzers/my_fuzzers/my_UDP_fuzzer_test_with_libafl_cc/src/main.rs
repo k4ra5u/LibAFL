@@ -26,7 +26,11 @@ use libafl_bolts::{
     AsSliceMut, Truncate,
 };
 use nix::sys::signal::Signal;
-use hdhunter::executors::NetworkRestartExecutor;
+use mylibafl::{
+    executors::NetworkRestartExecutor, 
+    mutators::quic_mutations, 
+    inputstruct::QuicStruct,
+};
 
 /// The commandline args this fuzzer accepts
 #[derive(Debug, Parser)]
@@ -40,7 +44,7 @@ struct Opt {
     #[arg(
         help = "The directory to read initial inputs from ('seeds')",
         name = "INPUT_DIR",
-        default_value = "corpus/"
+        default_value = "/home/john/Desktop/cjj_related/testing_new/fuzzing-test/LibAFL/fuzzers/my_fuzzers/my_UDP_fuzzer_test_with_libafl_cc/corpus/"
 
     )]
     in_dir: PathBuf,
@@ -83,14 +87,15 @@ struct Opt {
 static mut SHMEM_EDGE_MAP: Option<UnixShMem> = None;
 
 pub fn main() {
-    std::env::set_var("RUST_LOG", "warn");
+    std::env::set_var("RUST_LOG", "info");
+    std::env::set_var("SSLKEYLOGFILE", "/home/john/Desktop/cjj_related/quic-go/example/key.log");
     env_logger::init();
     const MAP_SIZE: usize = 65536;
 
     //let opt = Opt::parse();
 
     //let corpus_dirs: Vec<PathBuf> = [opt.in_dir].to_vec();
-    let corpus_dirs: Vec<PathBuf> = vec![PathBuf::from("corpus/")];
+    let corpus_dirs: Vec<PathBuf> = vec![PathBuf::from("/home/john/Desktop/cjj_related/testing_new/fuzzing-test/LibAFL/fuzzers/my_fuzzers/my_UDP_fuzzer_test_with_libafl_cc/corpus/")];
 
     // The unix shmem provider supported by AFL++ for shared memory
     let mut shmem_provider = UnixShMemProvider::new().unwrap();
@@ -202,17 +207,18 @@ pub fn main() {
     }
 
     state.add_metadata(tokens);
-    let mut tcase = Testcase::new(BytesInput::from(vec![0x31, 0x32, 0x33, 0x34]));
-    //state.corpus().add(tcase); 
+    // let mut tcase = Testcase::new(BytesInput::from(vec![0x31, 0x32, 0x33, 0x34]));
+    // state.corpus().add(tcase); 
     // state.load_initial_inputs_by_filenames_forced(&mut fuzzer, &mut executor, &mut mgr,&corpus_dirs);
     // state.corpus().load_input_into(&mut tcase).unwrap();
-    state.corpus_mut().add(tcase).unwrap();
-    println!("We imported {} inputs from disk.", state.corpus().count());
+    // state.corpus_mut().add(tcase).unwrap();
+    // println!("We imported {} inputs from disk.", state.corpus().count());
     
 
     // Setup a mutational stage with a basic bytes mutator
-    let mutator =
-        StdScheduledMutator::with_max_stack_pow(havoc_mutations().merge(tokens_mutations()), 6);
+    // let mutator =
+    //     StdScheduledMutator::with_max_stack_pow(havoc_mutations().merge(tokens_mutations()), 6);
+    let mutator = StdScheduledMutator::with_max_stack_pow(quic_mutations(), 6);
     let mut stages = tuple_list!(StdMutationalStage::new(mutator));
 
     fuzzer

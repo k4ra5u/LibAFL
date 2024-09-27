@@ -21,4 +21,4 @@ libafl = { path = "../../../libafl/", features = ["std", "derive"] }
 libafl_bolts = { path = "../../../libafl_bolts/" }
 clap = { version = "4.0", features = ["derive"] }
 nix = { version = "0.29", features = ["signal"] }
-hdhunter = { path = "../myExecutors/" }
+mylibafl = { path = "../myExecutors/" }

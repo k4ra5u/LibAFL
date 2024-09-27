@@ -26,7 +26,7 @@ use libafl_bolts::{
     AsSliceMut, Truncate,
 };
 use nix::sys::signal::Signal;
-use hdhunter::executors::NetworkRestartExecutor;
+use mylibafl::executors::NetworkRestartExecutor;
 
 /// The commandline args this fuzzer accepts
 #[derive(Debug, Parser)]

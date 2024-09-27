@@ -1,5 +1,5 @@
 [package]
-name = "hdhunter"
+name = "mylibafl"
 edition = "2021"
 #version.workspace = true
 

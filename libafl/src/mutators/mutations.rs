@@ -33,7 +33,9 @@ pub(crate) unsafe fn buffer_self_copy<T>(data: &mut [T], from: usize, to: usize,
 
 /// Mem move between vecs
 #[inline]
-pub(crate) unsafe fn buffer_copy<T>(dst: &mut [T], src: &[T], from: usize, to: usize, len: usize) {
+/* PATCH */
+// change the visibility of the function to public:pub(crate)=>pub
+pub unsafe fn buffer_copy<T>(dst: &mut [T], src: &[T], from: usize, to: usize, len: usize) {
     debug_assert!(!dst.is_empty());
     debug_assert!(!src.is_empty());
     debug_assert!(from + len <= src.len());

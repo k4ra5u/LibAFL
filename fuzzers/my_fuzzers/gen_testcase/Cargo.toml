@@ -1,8 +1,7 @@
 [package]
-name = "my_UDP_fuzzer_test_with_libafl_cc"
-version = "0.8.2"
-authors = ["ergrelet <ergrelet@users.noreply.github.com>"]
+name = "gen_testcase"
 edition = "2021"
+version.workspace = true
 
 [features]
 default = ["std"]
@@ -30,7 +29,5 @@ libafl_targets = { path = "../../../libafl_targets/", features = ["sancov_pcguar
 log = "0.4.21"
 env_logger = "0.11"
 mylibafl = { path = "../myExecutors/" }
+quiche = {path = "../../../quiche/quiche"}
 
-[lib]
-name = "lib_my_UDP_fuzzer_test_with_libafl_cc"
-crate-type = ["staticlib"]

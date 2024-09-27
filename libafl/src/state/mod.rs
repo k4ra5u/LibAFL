@@ -847,7 +847,7 @@ where
             manager,
             LoadConfig {
                 loader: &mut |_, _, path| I::from_file(path),
-                forced: false,
+                forced: true,
                 exit_on_solution: false,
             },
         )
