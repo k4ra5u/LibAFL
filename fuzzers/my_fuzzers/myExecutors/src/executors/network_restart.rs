@@ -38,6 +38,7 @@ use log::{error, info,debug,warn};
 use quiche::{frame, packet, Connection, ConnectionId, Error, Header};
 
 use crate::inputstruct::{pkt_resort_type, quic_input::InputStruct_deserialize, FramesCycleStruct, InputStruct, QuicStruct};
+use crate::observers::*;
 
 //use crate::QuicStruct;
 // use quic_input::{FramesCycleStruct, InputStruct, pkt_resort_type, QuicStruct};
@@ -304,6 +305,12 @@ where
         _mgr: &mut EM,
         input: &Self::Input,
     ) -> Result<libafl::prelude::ExitKind, libafl::prelude::Error> {
+        let mut observers = self.observers_mut();
+        //let mut recv_pkt_num_observer = None;
+        for observer in observers.iter() {
+            if let Some(recv_pkt_num_observer) = observer.downcast_mut::<RecvPktNumObserver>() {}
+        }
+
 
         let mut out = [0; MAX_DATAGRAM_SIZE<<10];
         let mut exit_kind = ExitKind::Ok;
