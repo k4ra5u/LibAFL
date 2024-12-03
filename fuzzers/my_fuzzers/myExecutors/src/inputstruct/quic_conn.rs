@@ -712,13 +712,14 @@ impl QuicStruct {
         Ok(())
     }
 
-    pub fn handle_recving(&mut self) -> Result<usize, Error> {
+    pub fn handle_recving(&mut self) -> Result<(usize,usize), Error> {
         let mut out = [0; MAX_DATAGRAM_SIZE];
         let mut buf = [0; 65535];
         let mut recv_pkts = 0;
 
         // sockets.push(&self.migrate_socket);
         let mut conn = self.conn.as_mut().unwrap();
+        let mut recv_bytes = 0;
 
         for event in &self.events {
             let socket = match event.token() {
@@ -847,16 +848,17 @@ impl QuicStruct {
                     },
                 };
 
+                recv_bytes += read;
                 debug!("{}: processed {} bytes", local_addr, read);
             }
         }
 
         debug!("done reading");
-        Ok((recv_pkts))
+        Ok((recv_pkts,recv_bytes))
     }
 
 
-    pub fn handle_recving_once(&mut self) -> Result<usize, Error> {
+    pub fn handle_recving_once(&mut self) -> Result<(usize,usize), Error> {
         let mut out = [0; MAX_DATAGRAM_SIZE];
         let mut buf = [0; 65535];
         let mut recv_pkts = 0;
@@ -864,6 +866,7 @@ impl QuicStruct {
         // sockets.push(&self.migrate_socket);
         let mut conn = self.conn.as_mut().unwrap();
 
+        let mut recv_bytes = 0;
         for event in &self.events {
             let socket = match event.token() {
                 mio::Token(0) => &self.socket,
@@ -885,7 +888,7 @@ impl QuicStruct {
                     // Process subsequent events.
                     if e.kind() == std::io::ErrorKind::WouldBlock {
                         debug!("{}: recv() would block", local_addr);
-                        return Ok((0));
+                        return Ok((0,0));
                     }
 
                     debug!("{local_addr}: recv() failed: {e:?}");
@@ -930,12 +933,12 @@ impl QuicStruct {
                     return Err(e);
                 },
             };
-
+            recv_bytes += read;
             debug!("{}: processed {} bytes", local_addr, read);
         }
 
         debug!("done reading");
-        Ok((recv_pkts))
+        Ok((recv_pkts,recv_bytes))
     }
 
     pub fn send_buf(&mut self,buf: &mut [u8], len: usize,) -> Result<usize,Error> {

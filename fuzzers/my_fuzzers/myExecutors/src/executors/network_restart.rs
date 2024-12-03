@@ -5,7 +5,7 @@ use std::{
     }, path::Path, process::{Child, Command, Output, Stdio}, str, thread::sleep, time::Duration, vec
 };
 use std::num::ParseIntError;
-use libc::ERA;
+use libc::{CODA_SUPER_MAGIC, ERA};
 use nix::{
     sys::{
         select::{pselect, FdSet},
@@ -16,15 +16,12 @@ use nix::{
     unistd::Pid,
 };
 use libafl::{
-    executors::{
+    corpus::Corpus, executors::{
         Executor, ExitKind, HasObservers
-    }, 
-    inputs::HasTargetBytes, 
-    observers::{
-        ObserversTuple, UsesObservers, get_asan_runtime_flags_with_log_path, AsanBacktraceObserver
-    }, 
-    state::{
-        HasExecutions, State, UsesState
+    }, inputs::HasTargetBytes, observers::{
+        get_asan_runtime_flags_with_log_path, AsanBacktraceObserver, ObserversTuple, UsesObservers
+    }, state::{
+        HasCorpus, HasExecutions, State, UsesState
     }
 };
 use libafl_bolts::{
@@ -39,6 +36,7 @@ use quiche::{frame, packet, Connection, ConnectionId, Error, Header};
 
 use crate::inputstruct::{pkt_resort_type, quic_input::InputStruct_deserialize, FramesCycleStruct, InputStruct, QuicStruct};
 use crate::observers::*;
+use crate::misc::*;
 
 //use crate::QuicStruct;
 // use quic_input::{FramesCycleStruct, InputStruct, pkt_resort_type, QuicStruct};
@@ -51,21 +49,21 @@ const HTTP_REQ_STREAM_ID: u64 = 4;
 pub struct NetworkRestartExecutor<OT, S, SP>
 where SP: ShMemProvider,
 {
-    start_command: String,
-    judge_command: String,
-    envs: Vec<(OsString, OsString)>,
-    port: u16,
-    timeout: Duration,
-    observers: OT,
-    phantom: std::marker::PhantomData<S>,
-    map: Option<SP::ShMem>,
-    map_size: Option<usize>,
-    kill_signal: Option<Signal>,
-    asan_obs: Option<Handle<AsanBacktraceObserver>>,
-    crash_exitcode: Option<i8>,
-    shmem_provider: SP,
-    pid: i32,
-    quic_st: Option<QuicStruct>,
+    pub start_command: String,
+    pub judge_command: String,
+    pub envs: Vec<(OsString, OsString)>,
+    pub port: u16,
+    pub timeout: Duration,
+    pub observers: OT,
+    pub phantom: std::marker::PhantomData<S>,
+    pub map: Option<SP::ShMem>,
+    pub map_size: Option<usize>,
+    pub kill_signal: Option<Signal>,
+    pub asan_obs: Option<Handle<AsanBacktraceObserver>>,
+    pub crash_exitcode: Option<i8>,
+    pub shmem_provider: SP,
+    pub pid: i32,
+    pub quic_st: Option<QuicStruct>,
     pub recv_pkts: usize,
     pub non_res_times: usize,
 }
@@ -125,24 +123,27 @@ SP: ShMemProvider,
         }
     }
 
-
     pub fn start_command(mut self,str:String) -> Self {
         self.start_command = str;
         self
 
     }
+
     pub fn judge_command(mut self,str:String) -> Self {
         self.judge_command = str;
         self
     }
+
     pub fn port(mut self,port:u16) -> Self {
         self.port = port;
         self
     }
+
     pub fn timeout(mut self,timeout:Duration) -> Self {
         self.timeout = timeout;
         self
     }
+
     pub fn coverage_map_size(mut self, size: usize) -> Self {
         self.map_size = Some(size);
         self
@@ -191,7 +192,44 @@ SP: ShMemProvider,
         self.asan_obs = Some(asan_obs);
         self
     }
-    
+
+    pub fn update_recv_pkt_obs(&mut self, buf_obs: RecvPktNumObserver) {
+        let recv_pkt_num_observer_ref = RecvPktNumObserver::new("recv_pkt_num").handle();
+        if let Some(recv_pkt_num_observer) = self.observers.get_mut(&recv_pkt_num_observer_ref) {
+            recv_pkt_num_observer.set_recv_bytes(buf_obs.get_recv_bytes());
+            recv_pkt_num_observer.set_recv_pkts(buf_obs.get_recv_pkts());
+            recv_pkt_num_observer.set_send_bytes(buf_obs.get_send_bytes());
+            recv_pkt_num_observer.set_send_pkts(buf_obs.get_send_pkts());
+        }
+    }
+
+    pub fn inital_cpu_usage_obs(&mut self) {
+        let cpu_usage_observer_ref = CPUUsageObserver::new("cpu_usage").handle();
+        if let Some(cpu_usage_observer) = self.observers.get_mut(&cpu_usage_observer_ref) {
+            cpu_usage_observer.set_pid(self.pid as u32);
+            cpu_usage_observer.add_cpu_id(20);
+            cpu_usage_observer.add_cpu_id(21);
+            // cpu_usage_observer.add_cpu_id(22);
+            // cpu_usage_observer.add_cpu_id(23);
+            let based_cpu_usage = cpu_usage_observer.get_cur_cpu_usage();
+            cpu_usage_observer.set_based_cpu_usage(based_cpu_usage);
+        }
+    }
+
+    pub fn update_cpu_usage_obs(&mut self,cur_cpu_usages: Vec<f64>) {
+        let cpu_usage_observer_ref = CPUUsageObserver::new("cpu_usage").handle();
+        if let Some(cpu_usage_observer) = self.observers.get_mut(&cpu_usage_observer_ref) {
+            for cur_cpu_usage in cur_cpu_usages.iter() {
+                cpu_usage_observer.add_record_cpu_usage(*cur_cpu_usage);
+                cpu_usage_observer.add_frame_record_times();
+                let curr_process_time = get_process_cpu_time(cpu_usage_observer.pid).expect("Failed to get process CPU time");
+                let curr_cpu_times = get_cpu_time(&cpu_usage_observer.cpu_ids).expect("Failed to get CPU core times");
+                cpu_usage_observer.prev_cpu_times = curr_cpu_times.clone();
+                cpu_usage_observer.prev_process_time = curr_process_time;
+            }
+        }
+    }
+
     pub fn build_quic_struct(mut self, server_name: String, server_port: u16, server_host: String) -> Self {
 
     
@@ -199,6 +237,7 @@ SP: ShMemProvider,
         self.quic_st = Some(quic_st);
         self
     }
+
     pub fn rebuild_quic_struct(&mut self) {
         let server_name = self.quic_st.as_ref().unwrap().server_name.clone();
         let server_port = self.quic_st.as_ref().unwrap().server_port;
@@ -225,6 +264,7 @@ SP: ShMemProvider,
             
             
     }
+
     pub fn get_coverage_map_size(&self) -> Option<usize> {
         self.map_size
     }
@@ -244,7 +284,10 @@ SP: ShMemProvider,
             match stdout.trim().parse::<i32>() {
                 Ok(value) => return value,
                 //Err(e) => {eprintln!("Failed to parse integer: {}", e);return 0},
-                Err(e) => {return 0},
+                Err(e) => {
+                    warn!("Failed to parse integer: {}", e);
+                    return 0
+                },
             }
         } else {
             // 处理标准错误输出
@@ -293,7 +336,7 @@ where
 impl<EM, OT, S,SP, Z> Executor<EM, Z> for NetworkRestartExecutor<OT, S,SP>
 where
     EM: UsesState<State = S>,
-    S: State + HasExecutions,
+    S: State + HasExecutions + HasCorpus,
     S::Input: HasTargetBytes,
     SP: ShMemProvider,
     OT: MatchName + ObserversTuple<S>,
@@ -305,16 +348,24 @@ where
         _mgr: &mut EM,
         input: &Self::Input,
     ) -> Result<libafl::prelude::ExitKind, libafl::prelude::Error> {
-        let mut observers = self.observers_mut();
+        //let mut observers: RefIndexable<&mut OT, OT> = self.observers_mut();
+        info!("now {:?} corpus",state.corpus().count());
         //let mut recv_pkt_num_observer = None;
-        for observer in observers.iter() {
-            if let Some(recv_pkt_num_observer) = observer.downcast_mut::<RecvPktNumObserver>() {}
-        }
+        // for observer in observers.iter() {
+        //     if let Some(recv_pkt_num_observer) = observer.downcast_mut::<RecvPktNumObserver>() {}
+        // }
+
+        let mut buf_recv_pkt_num_observer = RecvPktNumObserver::new("recv_pkt_num");
+        // let cc_times_observer_ref = CCTimesObserver::new("cc_times").handle();
+        // let mut cc_times_observer = self.observers.get_mut(&cc_times_observer_ref).unwrap();
+        // let mut buf_asan_backtrace_observer = AsanBacktraceObserver::new("asan_backtrace");
 
 
         let mut out = [0; MAX_DATAGRAM_SIZE<<10];
         let mut exit_kind = ExitKind::Ok;
         let mut total_recv_pkts = 0;
+        let mut total_recv_bytes = 0;
+        let mut cur_cpu_usages: Vec<f64> = Vec::new();
         *state.executions_mut() += 1;
         for (key, value) in &self.envs {
             std::env::set_var(key, value);
@@ -328,10 +379,20 @@ where
             .stderr(Stdio::null())
             .status()
             .unwrap();
-            let pid = self.judge_server_status();
-            self.pid = pid;
-            //self.quic_st.as_mut().unwrap().connect();
         }
+        
+        let pid = self.judge_server_status();
+        self.pid = pid;
+        self.inital_cpu_usage_obs();
+        
+        // cpu_usage_observer.set_pid(self.pid as u32);
+        // cpu_usage_observer.add_cpu_id(20);
+        // cpu_usage_observer.add_cpu_id(21);
+        // cpu_usage_observer.add_cpu_id(22);
+        // cpu_usage_observer.add_cpu_id(23);
+        // let based_cpu_usage = cpu_usage_observer.get_cur_cpu_usage();
+        // cpu_usage_observer.set_based_cpu_usage(based_cpu_usage);
+
         //quic_st 必须存在，检查 quic_st 合法性
         let mut valid_quic_st = false;
         if let Some(quic_st) = self.quic_st.as_ref() {
@@ -345,6 +406,8 @@ where
         }
         
         let mut quic_st = self.quic_st.as_mut().unwrap();
+        let cpu_usage_observer_ref = CPUUsageObserver::new("cpu_usage").handle();
+        let cpu_usage_observer = self.observers.get_mut(&cpu_usage_observer_ref).unwrap();
         match & mut quic_st.conn  {
             //conn不存在：重新建立连接
             None => {
@@ -443,82 +506,114 @@ where
         input_struct = InputStruct_deserialize(inputs);
 
         let pkt_type = input_struct.pkt_type;
-        let lost_time_dur = input_struct.send_timeout;
+        // let lost_time_dur = input_struct.send_timeout;
+        let lost_time_dur = 0;
         let recv_time = input_struct.recv_timeout;
         let mut recv_left_time = recv_time;
-        let frames = input_struct.gen_frames();
-        
-        let max_pkt_len = 1200;
+                
+        let max_pkt_len = 0;
         let mut cur_pkt_len = 0;
-        let mut total_sent_frames = 0;
-        let mut frame_list: Vec<frame::Frame> = Vec::new();
-        for frame in frames.iter() {
-
-            debug!("frame len: {:?}", frame.wire_len());
-            debug!("frame type: {:?}", frame);
-            // 注释代码是按照标准的MTU讲帧尽可能的合并，在fuzz过程中这应该是负优化，于是每次只发送1个帧
-            // if cur_pkt_len + frame.wire_len() < max_pkt_len {
-            //     frame_list.push(frame.clone());
-            //     cur_pkt_len += frame.wire_len();
-            //     total_sent_frames += 1;
-            //     debug!("sending frame: {:?}", frame);
-            //     continue;
-            // }
-            frame_list.push(frame.clone());
-            total_sent_frames += 1;
-
-            quic_st.send_pkt_to_server(pkt_type, &frame_list, &mut out);
-            match quic_st.handle_sending(){
-                Err(e) => {
-                    eprintln!("Failed to send data: {:?}", e);
-                    exit_kind = ExitKind::Crash;
-                },
-                Ok(_) => (),
-            }
-            debug!("total sent frames: {:?}, all: {:?}", total_sent_frames, frames.len());
-            sleep(Duration::from_micros(300));
-            if recv_left_time <= lost_time_dur {
-                let send_left_time = lost_time_dur - recv_left_time;
-                // sleep(Duration::from_millis(recv_left_time.try_into().unwrap()));
-                recv_left_time =  recv_time - send_left_time ;
-                //recv&handle conn's received packet 
-                match quic_st.handle_recving_once(){
-                    Err(e) => {
-                        eprintln!("Failed to recv data: {:?}", e);
-                        exit_kind = ExitKind::Crash;
-                    },
-                    Ok(recv_pkts) => {
-                        total_recv_pkts += recv_pkts;
-                        ()
+        let mut total_sent_frames:u64 = 0;
+        let mut total_sent_pkts: u64 = 0;
+        let mut total_sent_bytes = 0;
+        let cycles = input_struct.frames_cycle.len();
+        for cur_cycle in 0..cycles{
+            let repeat_num = input_struct.frames_cycle[cur_cycle].repeat_num;
+            let mut start_pos = 0;
+            for i in 0..repeat_num  {
+                if i % 5001 == 5000 || i == repeat_num - 1 {
+                    let frames = input_struct.gen_frames(start_pos,i as u64,cur_cycle);
+                    start_pos = i as u64 + 1;
+                    let mut frame_list: Vec<frame::Frame> = Vec::new();
+                    for frame in frames.iter() {
+    
+                        debug!("frame len: {:?}", frame.wire_len());
+                        debug!("frame type: {:?}", frame);
+                        // 注释代码是按照标准的MTU讲帧尽可能的合并，在fuzz过程中这应该是负优化，于是每次只发送1个帧
+                        if cur_pkt_len + frame.wire_len() < max_pkt_len {
+                            frame_list.push(frame.clone());
+                            cur_pkt_len += frame.wire_len();
+                            total_sent_frames += 1;
+                            total_sent_bytes += frame.wire_len();
+                            debug!("sending frame: {:?}", frame);
+                            continue;
+                        }
+                        frame_list.push(frame.clone());
+                        total_sent_frames += 1;
+                        total_sent_bytes += frame.wire_len();
+                        total_sent_pkts += 1;
+    
+            
+                        quic_st.send_pkt_to_server(pkt_type, &frame_list, &mut out);
+                        match quic_st.handle_sending(){
+                            Err(e) => {
+                                eprintln!("Failed to send data: {:?}", e);
+                                exit_kind = ExitKind::Crash;
+                            },
+                            Ok(_) => (),
+                        }
+                        // info!("total sent frames: {:?}, all: {:?}", total_sent_frames, frames.len());
+                        sleep(Duration::from_micros(10));
+                        if recv_left_time <= lost_time_dur {
+                            let send_left_time = lost_time_dur - recv_left_time;
+                            // sleep(Duration::from_millis(recv_left_time.try_into().unwrap()));
+                            recv_left_time =  recv_time - send_left_time ;
+                            //recv&handle conn's received packet 
+                            match quic_st.handle_recving_once(){
+                                Err(e) => {
+                                    eprintln!("Failed to recv data: {:?}", e);
+                                    exit_kind = ExitKind::Crash;
+                                },
+                                Ok((recv_pkts,recv_bytes)) => {
+                                    total_recv_pkts += recv_pkts;
+                                    total_recv_bytes += recv_bytes;
+            
+                                    ()
+                                }
+                            }
+            
+                            // sleep(Duration::from_millis( send_left_time as u64));
+                            
+                        }
+                        else {
+                            // sleep(Duration::from_millis(lost_time_dur.try_into().unwrap()));
+                            recv_left_time -= lost_time_dur;
+                        }
+                        // 每发送100个包统计一下CPU使用率，不然统计的太多了
+                        if total_sent_frames %100 ==0 {
+                            let cur_cpu_usage = cpu_usage_observer.get_cur_cpu_usage();
+                            cur_cpu_usages.push(cur_cpu_usage);
+                        }
+            
+                        debug!("recv_left_time: {:?},lost_time: {:?}", recv_left_time,lost_time_dur);
+                        cur_pkt_len = frame.wire_len();
+                        frame_list.clear();
+                        // frame_list.push(frame.clone());
+            
                     }
+                    info!("sent {:?} frames",frames.len());
+    
                 }
-
-                // sleep(Duration::from_millis( send_left_time as u64));
-
             }
-            else {
-                // sleep(Duration::from_millis(lost_time_dur.try_into().unwrap()));
-                recv_left_time -= lost_time_dur;
-            } 
-            debug!("recv_left_time: {:?},lost_time: {:?}", recv_left_time,lost_time_dur);
-            cur_pkt_len = frame.wire_len();
-            frame_list.clear();
-            frame_list.push(frame.clone());
+    
+        } 
 
-        }
-        warn!("sent {:?} frames",frames.len());
-        for i in 0..frames.len() {
+        for i in 0..10 {
             match quic_st.handle_recving(){
                 Err(e) => {
                     eprintln!("Failed to recv data: {:?}", e);
                     exit_kind = ExitKind::Crash;
                 },
-                Ok(recv_pkts) => {
+                Ok((recv_pkts,recv_bytes)) => {
                     total_recv_pkts += recv_pkts;
+                    total_recv_bytes += recv_bytes;
                     ()
                 }
             }
         }
+        // sleep(Duration::from_secs(100));
+
+
         if total_recv_pkts != 0 {
             self.change_recv_pkts(total_recv_pkts);
             self.change_non_res_times(0);
@@ -528,15 +623,27 @@ where
             self.change_recv_pkts(0);
             self.change_non_res_times(self.non_res_times + 1);
         }
-        
+        buf_recv_pkt_num_observer.set_recv_bytes(total_recv_bytes as u64);
+        buf_recv_pkt_num_observer.set_recv_pkts(total_recv_pkts as u64);
+        buf_recv_pkt_num_observer.set_send_bytes(total_sent_bytes as u64);
+        buf_recv_pkt_num_observer.set_send_pkts(total_sent_pkts  as u64);
+        self.update_recv_pkt_obs(buf_recv_pkt_num_observer);
+        self.update_cpu_usage_obs(cur_cpu_usages);
         // for i in 0..frames.len() {
         //     quic_st.handle_recving();
         // }
         
         let res = self.judge_server_status();
-        if res == 0  || self.non_res_times == 3{
+        if self.non_res_times == 30{
             error!("marked crashed");
-            exit_kind = ExitKind::Crash;
+            // kill self.pid
+            let pid = self.pid;
+            warn!("killing pid: {:?}", pid);
+            let signal = self.kill_signal.unwrap_or(Signal::SIGKILL);
+            unsafe {
+                kill(Pid::from_raw(pid), signal).unwrap();
+            }
+            exit_kind = ExitKind::Ok;
         }
 
         Ok(exit_kind)

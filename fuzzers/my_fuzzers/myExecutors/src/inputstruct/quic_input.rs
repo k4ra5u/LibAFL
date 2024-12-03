@@ -169,343 +169,349 @@ impl InputStruct {
         }
     }
     
-    pub fn gen_frames(&self) -> Vec<frame::Frame> {
+    pub fn gen_frames(&self,start:u64, end:u64,cur_cycle:usize) -> Vec<frame::Frame> {
         let mut frames = Vec::new();
-        for frames_cycle in &self.frames_cycle {
-            for i in 0..frames_cycle.repeat_num {
-                for frame in &frames_cycle.basic_frames {
-                    //default: 由于上层已经打乱了次序，这里每个cycle只有一个frame，方便对frame进行操作
-                    //对于每种frame设计不同的操作
-                    match frame {
-                        frame::Frame::Padding {
-                            len,
-                        } => {
-                            frames.push(frame::Frame::Padding {
-                                len: *len,
+        let frames_cycle = &self.frames_cycle[cur_cycle];
+        
+        for i in start..end +1 {
+            for frame in &frames_cycle.basic_frames {
+                //default: 由于上层已经打乱了次序，这里每个cycle只有一个frame，方便对frame进行操作
+                //对于每种frame设计不同的操作
+                match frame {
+                    frame::Frame::Padding {
+                        len,
+                    } => {
+                        frames.push(frame::Frame::Padding {
+                            len: *len,
+                            });
+                    },
+                    frame::Frame::Ping {
+                        mtu_probe: mtu_probe,
+                    }  => {
+                        match *mtu_probe {
+                            Some(mtu_probe) => {
+                                let mut mutated_mtu_probe = mtu_probe ;
+                                let mut rng = rand::thread_rng();
+                                mutated_mtu_probe = rng.gen_range(0..=1500);
+                                frames.push(frame::Frame::Ping {
+                                    mtu_probe: Some(mutated_mtu_probe),
                                 });
-                        },
-                        frame::Frame::Ping {
-                            mtu_probe: mtu_probe,
-                        }  => {
-                            match *mtu_probe {
-                                Some(mtu_probe) => {
-                                    let mut mutated_mtu_probe = mtu_probe ;
-                                    let mut rng = rand::thread_rng();
-                                    mutated_mtu_probe = rng.gen_range(0..=1500);
-                                    frames.push(frame::Frame::Ping {
-                                        mtu_probe: Some(mutated_mtu_probe),
-                                    });
-                                },
-                                None => {
-                                    frames.push(frame::Frame::Ping {
-                                        mtu_probe: None,
-                                    })
-                                },
-                            }
-    
-                        },
-                        frame::Frame::ACK {
-                            ack_delay,
-                            ranges,
-                            ecn_counts,
-                        } => {
-    
-                            let mut mutated_ack_delay = ack_delay;
-                            let mut mutated_ranges = ranges.clone();
-                            let mut mutated_ecn_counts = ecn_counts.clone();
-                            mutated_ack_delay = ack_delay;
-                            mutated_ranges = ranges.clone();
-                            mutated_ecn_counts = ecn_counts.clone();
-                            frames.push(frame::Frame::ACK {
-                                ack_delay: *mutated_ack_delay,
-                                ranges: mutated_ranges,
-                                ecn_counts: mutated_ecn_counts,
-                            });
-                        },
-                        frame::Frame::ResetStream {
-                            stream_id,
-                            error_code,
-                            final_size,
-                        } => {
-                            let mut mutated_stream_id = *stream_id;
-                            let mut mutated_error_code = *error_code;
-                            let mut mutated_final_size = *final_size;
-                            mutated_stream_id = *stream_id ;
-                            mutated_error_code = *error_code + 1;
-                            mutated_final_size = *final_size + 1;
-                            frames.push(frame::Frame::ResetStream {
-                                stream_id: mutated_stream_id,
-                                error_code: mutated_error_code,
-                                final_size: mutated_final_size,
-                            });
-                        },
-                        frame::Frame::StopSending {
-                            stream_id,
-                            error_code,
-                        } => {
-                            let mut mutated_stream_id = *stream_id;
-                            let mut mutated_error_code = *error_code;
-                            mutated_stream_id = *stream_id ;
-                            mutated_error_code = *error_code + 1;
-                            frames.push(frame::Frame::StopSending {
-                                stream_id: mutated_stream_id,
-                                error_code: mutated_error_code,
-                            });
-                        },
-                        frame::Frame::Crypto {
-                            data,
-                        } => {
-                            let mut mutated_data = data.clone();
-                            mutated_data = data.clone();
-                            frames.push(frame::Frame::Crypto {
-                                data: mutated_data,
-                            });
-                        },
-                        frame::Frame::CryptoHeader { 
-                            offset, 
-                            length 
-                        } => {
-                            let mut mutated_offset = *offset;
-                            let mut mutated_length = *length;
-                            mutated_offset = *offset + 1;
-                            mutated_length = *length + 1;
-                            frames.push(frame::Frame::CryptoHeader {
-                                offset: mutated_offset,
-                                length: mutated_length,
-                            });
-                        },
-                        frame::Frame::NewToken {
-                            token,
-                        } => {
-                            let mut mutated_token = token.clone();
-                            mutated_token = token.clone();
-                            frames.push(frame::Frame::NewToken {
-                                token: mutated_token,
-                            });
-                        },
-                        frame::Frame::Stream {
-                            stream_id,
-                            data,
-                        } => {
-                            let mut mutated_stream_id = *stream_id;
-                            let mut mutated_data = data.clone();
-                            mutated_stream_id = *stream_id;
-                            mutated_data = data.clone();
-                            frames.push(frame::Frame::Stream {
-                                stream_id: mutated_stream_id,
-                                data: mutated_data,
-                            });
-                        },
-                        frame::Frame::StreamHeader { 
-                            stream_id, 
-                            offset, 
-                            length ,
-                            fin,
-                        } => {
-                            let mut mutated_stream_id = *stream_id;
-                            let mut mutated_offset = *offset;
-                            let mut mutated_length = *length;
-                            let mut mutated_fin = *fin;
-                            mutated_stream_id = *stream_id ;
-                            mutated_offset = *offset + 1000*i as u64;
-                            mutated_length = *length ;
-                            mutated_fin = *fin;
-                            frames.push(frame::Frame::StreamHeader {
-                                stream_id: mutated_stream_id,
-                                offset: mutated_offset,
-                                length: mutated_length,
-                                fin: mutated_fin,
-                            });
-                        },
-                        frame::Frame::MaxData {
-                            max,
-                        } => {
-                            let mut mutated_max = *max;
-                            mutated_max = *max + 1;
-                            frames.push(frame::Frame::MaxData {
-                                max: mutated_max,
-                            });
-                        },
-                        frame::Frame::MaxStreamData {
-                            stream_id,
-                            max,
-                        } => {
-                            let mut mutated_stream_id = *stream_id;
-                            let mut mutated_max = *max;
-                            mutated_stream_id = *stream_id + 1;
-                            mutated_max = *max + 1;
-                            frames.push(frame::Frame::MaxStreamData {
-                                stream_id: mutated_stream_id,
-                                max: mutated_max,
-                            });
-                        },
-                        frame::Frame::MaxStreamsBidi {
-                            max,
-                        } => {
-                            let mut mutated_max = *max;
-                            mutated_max = *max + i as u64;
-                            frames.push(frame::Frame::MaxStreamsBidi {
-                                max: mutated_max,
-                            });
-                        },
-                        frame::Frame::MaxStreamsUni {
-                            max,
-                        } => {
-                            let mut mutated_max = *max;
-                            mutated_max = *max + i as u64;
-                            frames.push(frame::Frame::MaxStreamsUni {
-                                max: mutated_max,
-                            });
-                        },
-                        frame::Frame::DataBlocked {
-                            limit,
-                        } => {
-                            let mut mutated_limit = *limit;
-                            mutated_limit = *limit + i as u64;
-                            frames.push(frame::Frame::DataBlocked {
-                                limit: mutated_limit,
-                            });
-                        },
-                        frame::Frame::StreamDataBlocked {
-                            stream_id,
-                            limit,
-                        } => {
-                            let mut mutated_stream_id = *stream_id;
-                            let mut mutated_limit = *limit;
-                            mutated_stream_id = *stream_id;
-                            mutated_limit = *limit + i as u64;
-                            frames.push(frame::Frame::StreamDataBlocked {
-                                stream_id: mutated_stream_id,
-                                limit: mutated_limit,
-                            });
-                        },
-                        frame::Frame::StreamsBlockedBidi { 
-                            limit 
-                        } => {
-                        let mut mutated_limit = *limit;
-                            mutated_limit = *limit + i as u64;
-                            frames.push(frame::Frame::StreamsBlockedBidi {
-                                limit: mutated_limit,
-                            });
-                        },
-                        frame::Frame::StreamsBlockedUni { 
-                            limit 
-                        } => {
-                            let mut mutated_limit = *limit;
-                            mutated_limit = *limit + i as u64;
-                            frames.push(frame::Frame::StreamsBlockedUni {
-                                limit: mutated_limit,
-                            });
-                        },
-    
-                        frame::Frame::NewConnectionId {
-                            seq_num,
-                            retire_prior_to,
-                            conn_id ,
-                            reset_token,
-                        } => {
-                            let mut mutated_seq = *seq_num;
-                            let mut mutated_retire_prior_to = *retire_prior_to;
-                            let mut mutated_cid = [0 as u8;quiche::MAX_CONN_ID_LEN];
-                            let mut mutated_reset_token = reset_token.clone();
-                            mutated_seq = *seq_num + i as u64;
-                            mutated_retire_prior_to = *retire_prior_to+ i as u64;
-                            
-                            SystemRandom::new().fill( & mut mutated_cid[..]).unwrap();
-                            SystemRandom::new().fill( & mut mutated_reset_token[..]).unwrap();
-
-                            // mutated_reset_token = reset_token.clone();
-                            frames.push(frame::Frame::NewConnectionId {
-                                seq_num: mutated_seq,
-                                retire_prior_to: mutated_retire_prior_to,
-                                conn_id: mutated_cid.to_vec(),
-                                reset_token: mutated_reset_token,
-                            });
-                        },
-                        frame::Frame::RetireConnectionId {
-                            seq_num,
-                        } => {
-                            let mut mutated_seq = *seq_num;
-                            mutated_seq = *seq_num + i as u64;
-                            frames.push(frame::Frame::RetireConnectionId {
-                                seq_num: mutated_seq,
-                            });
-                        },
-                        frame::Frame::PathChallenge {
-                            data,
-                        } => {
-                            let mut mutated_data = data.clone();
-                            mutated_data = data.clone();
-                            SystemRandom::new().fill( & mut mutated_data[..]).unwrap();
-                            frames.push(frame::Frame::PathChallenge {
-                                data: mutated_data,
-                            });
-                        },
-                        frame::Frame::PathResponse {
-                            data,
-                        } => {
-                            let mut mutated_data = data.clone();
-                            mutated_data = data.clone();
-                            SystemRandom::new().fill( & mut mutated_data[..]).unwrap();
-                            frames.push(frame::Frame::PathResponse {
-                                data: mutated_data,
-                            });
-                        },
-                        frame::Frame::ConnectionClose {
-                            error_code,
-                            frame_type,
-                            reason,
-                        } => {
-                            let mut mutated_error_code = *error_code;
-                            let mut mutated_frame_type = *frame_type;
-                            let mut mutated_reason = reason.clone();
-                            mutated_error_code = *error_code + i as u64;
-                            mutated_frame_type = *frame_type + i as u64;
-                            mutated_reason = reason.clone();
-                            frames.push(frame::Frame::ConnectionClose {
-                                error_code: mutated_error_code,
-                                frame_type: mutated_frame_type,
-                                reason: mutated_reason,
-                            });
-                        },
-                        frame::Frame::ApplicationClose { 
-                            error_code,
-                            reason,
-                        } => {
-                            let mut mutated_err_code = *error_code;
-                            let mut mutated_reason = reason.clone();
-                            mutated_err_code = *error_code  + i as u64;
-                            mutated_reason = reason.clone();
-                            frames.push(frame::Frame::ApplicationClose { 
-                                error_code: mutated_err_code,
-                                reason: mutated_reason 
-                            });
+                            },
+                            None => {
+                                frames.push(frame::Frame::Ping {
+                                    mtu_probe: None,
+                                })
+                            },
                         }
-                        frame::Frame::HandshakeDone => {
-                            frames.push(frame.clone());
-                        },
-                        frame::Frame::Datagram {
-                            data,
-                        } => {
-                            let mut mutated_data = data.clone();
-                            mutated_data = data.clone();
-                            frames.push(frame::Frame::Datagram {
-                                data: mutated_data,
-                            });
-                        },
-                        frame::Frame::DatagramHeader { 
-                            length 
-                        } => {
-                            let mut mutated_length = *length;
-                            mutated_length = *length + i;
-                            frames.push(frame::Frame::DatagramHeader {
-                                length: mutated_length,
-                            });
-                        },
+
+                    },
+                    frame::Frame::ACK {
+                        ack_delay,
+                        ranges,
+                        ecn_counts,
+                    } => {
+
+                        let mut mutated_ack_delay = ack_delay;
+                        let mut mutated_ranges = ranges.clone();
+                        let mut mutated_ecn_counts = ecn_counts.clone();
+                        mutated_ack_delay = ack_delay;
+                        mutated_ranges = ranges.clone();
+                        mutated_ecn_counts = ecn_counts.clone();
+                        frames.push(frame::Frame::ACK {
+                            ack_delay: *mutated_ack_delay,
+                            ranges: mutated_ranges,
+                            ecn_counts: mutated_ecn_counts,
+                        });
+                    },
+                    frame::Frame::ResetStream {
+                        stream_id,
+                        error_code,
+                        final_size,
+                    } => {
+                        let mut mutated_stream_id = *stream_id;
+                        let mut mutated_error_code = *error_code;
+                        let mut mutated_final_size = *final_size;
+                        mutated_stream_id = *stream_id ;
+                        mutated_error_code = *error_code + 1;
+                        mutated_final_size = *final_size + 1;
+                        frames.push(frame::Frame::ResetStream {
+                            stream_id: mutated_stream_id,
+                            error_code: mutated_error_code,
+                            final_size: mutated_final_size,
+                        });
+                    },
+                    frame::Frame::StopSending {
+                        stream_id,
+                        error_code,
+                    } => {
+                        let mut mutated_stream_id = *stream_id;
+                        let mut mutated_error_code = *error_code;
+                        mutated_stream_id = *stream_id ;
+                        mutated_error_code = *error_code + 1;
+                        frames.push(frame::Frame::StopSending {
+                            stream_id: mutated_stream_id,
+                            error_code: mutated_error_code,
+                        });
+                    },
+                    frame::Frame::Crypto {
+                        data,
+                    } => {
+                        let mut mutated_data = data.clone();
+                        mutated_data = data.clone();
+                        frames.push(frame::Frame::Crypto {
+                            data: mutated_data,
+                        });
+                    },
+                    frame::Frame::CryptoHeader { 
+                        offset, 
+                        length 
+                    } => {
+                        let mut mutated_offset = *offset;
+                        let mut mutated_length = *length;
+                        mutated_offset = *offset + 1;
+                        mutated_length = *length + 1;
+                        frames.push(frame::Frame::CryptoHeader {
+                            offset: mutated_offset,
+                            length: mutated_length,
+                        });
+                    },
+                    frame::Frame::NewToken {
+                        token,
+                    } => {
+                        let mut mutated_token = token.clone();
+                        mutated_token = token.clone();
+                        frames.push(frame::Frame::NewToken {
+                            token: mutated_token,
+                        });
+                    },
+                    frame::Frame::Stream {
+                        stream_id,
+                        data,
+                    } => {
+                        let mut mutated_stream_id = *stream_id;
+                        let mut mutated_data = data.clone();
+                        mutated_stream_id = *stream_id;
+                        mutated_data = data.clone();
+                        frames.push(frame::Frame::Stream {
+                            stream_id: mutated_stream_id,
+                            data: mutated_data,
+                        });
+                    },
+                    frame::Frame::StreamHeader { 
+                        stream_id, 
+                        offset, 
+                        length ,
+                        fin,
+                    } => {
+                        let mut mutated_stream_id = *stream_id;
+                        let mut mutated_offset = *offset;
+                        let mut mutated_length = *length;
+                        let mut mutated_fin = *fin;
+                        mutated_stream_id = *stream_id ;
+                        mutated_offset = *offset + 1000*i as u64;
+                        mutated_length = *length ;
+                        mutated_fin = *fin;
+                        frames.push(frame::Frame::StreamHeader {
+                            stream_id: mutated_stream_id,
+                            offset: mutated_offset,
+                            length: mutated_length,
+                            fin: mutated_fin,
+                        });
+                    },
+                    frame::Frame::MaxData {
+                        max,
+                    } => {
+                        let mut mutated_max = *max;
+                        mutated_max = *max + 1;
+                        frames.push(frame::Frame::MaxData {
+                            max: mutated_max,
+                        });
+                    },
+                    frame::Frame::MaxStreamData {
+                        stream_id,
+                        max,
+                    } => {
+                        let mut mutated_stream_id = *stream_id;
+                        let mut mutated_max = *max;
+                        mutated_stream_id = *stream_id + 1;
+                        mutated_max = *max + 1;
+                        frames.push(frame::Frame::MaxStreamData {
+                            stream_id: mutated_stream_id,
+                            max: mutated_max,
+                        });
+                    },
+                    frame::Frame::MaxStreamsBidi {
+                        max,
+                    } => {
+                        let mut mutated_max = *max;
+                        mutated_max = *max + i as u64;
+                        frames.push(frame::Frame::MaxStreamsBidi {
+                            max: mutated_max,
+                        });
+                    },
+                    frame::Frame::MaxStreamsUni {
+                        max,
+                    } => {
+                        let mut mutated_max = *max;
+                        mutated_max = *max + i as u64;
+                        frames.push(frame::Frame::MaxStreamsUni {
+                            max: mutated_max,
+                        });
+                    },
+                    frame::Frame::DataBlocked {
+                        limit,
+                    } => {
+                        let mut mutated_limit = *limit;
+                        mutated_limit = *limit + i as u64;
+                        frames.push(frame::Frame::DataBlocked {
+                            limit: mutated_limit,
+                        });
+                    },
+                    frame::Frame::StreamDataBlocked {
+                        stream_id,
+                        limit,
+                    } => {
+                        let mut mutated_stream_id = *stream_id;
+                        let mut mutated_limit = *limit;
+                        mutated_stream_id = *stream_id;
+                        mutated_limit = *limit + i as u64;
+                        frames.push(frame::Frame::StreamDataBlocked {
+                            stream_id: mutated_stream_id,
+                            limit: mutated_limit,
+                        });
+                    },
+                    frame::Frame::StreamsBlockedBidi { 
+                        limit 
+                    } => {
+                    let mut mutated_limit = *limit;
+                        mutated_limit = *limit + i as u64;
+                        frames.push(frame::Frame::StreamsBlockedBidi {
+                            limit: mutated_limit,
+                        });
+                    },
+                    frame::Frame::StreamsBlockedUni { 
+                        limit 
+                    } => {
+                        let mut mutated_limit = *limit;
+                        mutated_limit = *limit + i as u64;
+                        frames.push(frame::Frame::StreamsBlockedUni {
+                            limit: mutated_limit,
+                        });
+                    },
+
+                    frame::Frame::NewConnectionId {
+                        seq_num,
+                        retire_prior_to,
+                        conn_id ,
+                        reset_token,
+                    } => {
+                        let mut mutated_seq = *seq_num + i as u64;
+                        let mut mutated_retire_prior_to = *retire_prior_to + i as u64;
+                        let mut mutated_cid = [0 as u8;quiche::MAX_CONN_ID_LEN];
+                        let mut mutated_reset_token = reset_token.clone();
+                        mutated_seq = *seq_num + i as u64;
+                        mutated_retire_prior_to = *retire_prior_to+ i as u64;
+                        
+                        SystemRandom::new().fill( & mut mutated_cid[..]).unwrap();
+                        SystemRandom::new().fill( & mut mutated_reset_token[..]).unwrap();
+
+                        // mutated_reset_token = reset_token.clone();
+                        frames.push(frame::Frame::NewConnectionId {
+                            seq_num: mutated_seq,
+                            retire_prior_to: mutated_retire_prior_to,
+                            conn_id: mutated_cid.to_vec(),
+                            reset_token: mutated_reset_token,
+                        });
+                    },
+                    frame::Frame::RetireConnectionId {
+                        seq_num,
+                    } => {
+                        let mut mutated_seq = *seq_num;
+                        mutated_seq = *seq_num + i as u64;
+                        frames.push(frame::Frame::RetireConnectionId {
+                            seq_num: mutated_seq,
+                        });
+                    },
+                    frame::Frame::PathChallenge {
+                        data,
+                    } => {
+                        let mut mutated_data = data.clone();
+                        mutated_data = data.clone();
+                        SystemRandom::new().fill( & mut mutated_data[..]).unwrap();
+                        frames.push(frame::Frame::PathChallenge {
+                            data: mutated_data,
+                        });
+                    },
+                    frame::Frame::PathResponse {
+                        data,
+                    } => {
+                        let mut mutated_data = data.clone();
+                        mutated_data = data.clone();
+                        SystemRandom::new().fill( & mut mutated_data[..]).unwrap();
+                        frames.push(frame::Frame::PathResponse {
+                            data: mutated_data,
+                        });
+                    },
+                    frame::Frame::ConnectionClose {
+                        error_code,
+                        frame_type,
+                        reason,
+                    } => {
+                        let mut mutated_error_code = *error_code;
+                        let mut mutated_frame_type = *frame_type;
+                        let mut mutated_reason = reason.clone();
+                        mutated_error_code = *error_code + i as u64;
+                        mutated_frame_type = *frame_type + i as u64;
+                        mutated_reason = reason.clone();
+                        frames.push(frame::Frame::ConnectionClose {
+                            error_code: mutated_error_code,
+                            frame_type: mutated_frame_type,
+                            reason: mutated_reason,
+                        });
+                    },
+                    frame::Frame::ApplicationClose { 
+                        error_code,
+                        reason,
+                    } => {
+                        let mut mutated_err_code = *error_code;
+                        let mut mutated_reason = reason.clone();
+                        mutated_err_code = *error_code  + i as u64;
+                        mutated_reason = reason.clone();
+                        frames.push(frame::Frame::ApplicationClose { 
+                            error_code: mutated_err_code,
+                            reason: mutated_reason 
+                        });
                     }
+                    frame::Frame::HandshakeDone => {
+                        frames.push(frame.clone());
+                    },
+                    frame::Frame::Datagram {
+                        data,
+                    } => {
+                        let mut mutated_data = data.clone();
+                        mutated_data = data.clone();
+                        frames.push(frame::Frame::Datagram {
+                            data: mutated_data,
+                        });
+                    },
+                    frame::Frame::DatagramHeader { 
+                        length 
+                    } => {
+                        let mut mutated_length = *length;
+                        mutated_length = *length + i as usize;
+                        frames.push(frame::Frame::DatagramHeader {
+                            length: mutated_length,
+                        });
+                    },
+                    frame::Frame::Others { data } => {
+                        let mut mutated_data = data.clone();
+                        mutated_data = data.clone();
+                        frames.push(frame::Frame::Others {
+                            data: mutated_data,
+                        });
+                    },
                 }
             }
-    
     
         }
 
@@ -578,7 +584,7 @@ impl InputStruct {
         for frame_cycle in self.frames_cycle.iter(){
             frames_cycle_bytes.extend_from_slice(&(frame_cycle.repeat_num as u64).to_le_bytes());
             for frame in frame_cycle.basic_frames.clone()  {
-                let mut d = [0; 5300];
+                let mut d = [0; 153000];
                 let mut b = octets::OctetsMut::with_slice(&mut d);
                 let frame_len = frame.to_bytes(& mut b).unwrap();
                 frames_cycle_bytes.extend_from_slice(d[0..frame_len].to_vec().as_slice());

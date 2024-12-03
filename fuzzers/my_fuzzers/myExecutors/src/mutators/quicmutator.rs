@@ -78,7 +78,7 @@ where
         state: &mut S,
         input: &mut I,
     ) -> Result<MutationResult, Error> {
-        info!("QuicPktTypeMutator");
+        debug!("QuicPktTypeMutator");
         let mut quic_corp = quic_input::InputStruct_deserialize(input.bytes());
         let changed_pkt_type = state.rand_mut().below(6);
         match changed_pkt_type {
@@ -137,7 +137,7 @@ where
         state: &mut S,
         input: &mut I,
     ) -> Result<MutationResult, Error> {
-        info!("QuicSendRecvTimesMutator");
+        debug!("QuicSendRecvTimesMutator");
         let mut quic_corp = quic_input::InputStruct_deserialize(input.bytes());
         let mut changed_recv_time = state.rand_mut().below(1000);
         //let mut changed_send_time = state.rand_mut().below(1000);
@@ -179,7 +179,7 @@ where
         state: &mut S,
         input: &mut I,
     ) -> Result<MutationResult, Error> {
-        info!("QuicResortMutator");
+        debug!("QuicResortMutator");
         let mut quic_corp = quic_input::InputStruct_deserialize(input.bytes());
         let changed_packet_resort_type = state.rand_mut().below(4);
         match changed_packet_resort_type {
@@ -231,7 +231,7 @@ where
         state: &mut S,
         input: &mut I,
     ) -> Result<MutationResult, Error> {
-        info!("QuicFrameCyclesMutator");
+        debug!("QuicFrameCyclesMutator");
         let mut quic_corp = quic_input::InputStruct_deserialize(input.bytes());
 
         let changed_bytes = quic_corp.serialize();
@@ -266,7 +266,7 @@ where
         state: &mut S,
         input: &mut I,
     ) -> Result<MutationResult, Error> {
-        info!("QuicFrameRepeatNumMutator");
+        debug!("QuicFrameRepeatNumMutator");
         let mut quic_corp = quic_input::InputStruct_deserialize(input.bytes());
         let frames_cycle_len = quic_corp.frames_cycle.len();
         let selected_cycle = state.rand_mut().below(frames_cycle_len);
@@ -307,7 +307,7 @@ where
         state: &mut S,
         input: &mut I,
     ) -> Result<MutationResult, Error> {
-        info!("QuicFrameItemMutator");
+        debug!("QuicFrameItemMutator");
         let mut quic_corp = quic_input::InputStruct_deserialize(input.bytes());
         let frames_cycle_len = quic_corp.frames_cycle.len();
         let selected_cycle = state.rand_mut().below(frames_cycle_len);
@@ -351,7 +351,7 @@ where
         state: &mut S,
         input: &mut I,
     ) -> Result<MutationResult, Error> {
-        info!("QuicAddFrameItemMutator");
+        debug!("QuicAddFrameItemMutator");
         let mut quic_corp = quic_input::InputStruct_deserialize(input.bytes());
         let frames_cycle_len = quic_corp.frames_cycle.len();
         let selected_cycle = state.rand_mut().below(frames_cycle_len);
@@ -402,7 +402,7 @@ where
         state: &mut S,
         input: &mut I,
     ) -> Result<MutationResult, Error> {
-        info!("QuicDelFrameItemMutator");
+        debug!("QuicDelFrameItemMutator");
         let mut quic_corp = quic_input::InputStruct_deserialize(input.bytes());
         let frames_cycle_len = quic_corp.frames_cycle.len();
         let selected_cycle = state.rand_mut().below(frames_cycle_len);
@@ -455,7 +455,7 @@ where
         state: &mut S,
         input: &mut I,
     ) -> Result<MutationResult, Error> {
-        info!("QuicFrameItemNumMutator");
+        debug!("QuicFrameItemNumMutator");
         let mut quic_corp = quic_input::InputStruct_deserialize(input.bytes());
         let frames_cycle_len = quic_corp.frames_cycle.len();
         let selected_cycle = state.rand_mut().below(frames_cycle_len);
@@ -722,8 +722,11 @@ where
                 let changed_length = state.rand_mut().between(length as usize >> 2, (length << 2).try_into().unwrap());
                 frame::Frame::DatagramHeader { length: changed_length }
             },
+            frame::Frame::Others { data } => {
+                frame::Frame::Others { data }
+            },
         };
-        info!("changing num of frame: {:?}", frame);
+        debug!("changing num of frame: {:?}", frame);
         quic_corp.frames_cycle[selected_cycle].basic_frames[selected_frame] = frame;
         let changed_bytes = quic_corp.serialize();
         input.resize(changed_bytes.len(), 0);
@@ -759,12 +762,12 @@ where
         state: &mut S,
         input: &mut I,
     ) -> Result<MutationResult, Error> {
-        info!("QuicFrameItemStrLenMutator");
+        debug!("QuicFrameItemStrLenMutator");
         let mut quic_corp = quic_input::InputStruct_deserialize(input.bytes());
         let frames_cycle_len = quic_corp.frames_cycle.len();
         let selected_cycle = state.rand_mut().below(frames_cycle_len);
         let frames_len = quic_corp.frames_cycle[selected_cycle].basic_frames.len();
-        info!("frames_len: {:?}",frames_len);
+        debug!("frames_len: {:?}",frames_len);
         let selected_frame = state.rand_mut().below(frames_len);
         let frame = match quic_corp.frames_cycle[selected_cycle].basic_frames[selected_frame].clone() {
             frame::Frame::Padding { len } => {
@@ -881,9 +884,12 @@ where
             frame::Frame::DatagramHeader { length } => {
                 frame::Frame::DatagramHeader { length }
             },
+            frame::Frame::Others { data } => {
+                frame::Frame::Others { data }
+            },
         };
 
-        info!("changing str len of frame: {:?}", frame);
+        debug!("changing str len of frame: {:?}", frame);
         quic_corp.frames_cycle[selected_cycle].basic_frames[selected_frame] = frame;
         let changed_bytes = quic_corp.serialize();
         input.resize(changed_bytes.len(), 0);
@@ -919,7 +925,7 @@ where
         state: &mut S,
         input: &mut I,
     ) -> Result<MutationResult, Error> {
-        info!("QuicFrameItemStrContentMutator");
+        debug!("QuicFrameItemStrContentMutator");
         let mut quic_corp = quic_input::InputStruct_deserialize(input.bytes());
         let frames_cycle_len = quic_corp.frames_cycle.len();
         let selected_cycle = state.rand_mut().below(frames_cycle_len);
@@ -1064,6 +1070,9 @@ where
             },
             frame::Frame::DatagramHeader { length } => {
                 frame::Frame::DatagramHeader { length }
+            },
+            frame::Frame::Others { data } => {
+                frame::Frame::Others { data }
             },
         };
 
