@@ -6,10 +6,10 @@ use std::{
 };
 use quiche::{frame, packet, Connection, ConnectionId, Error, Header};
 use log::{error, info,debug,warn};
-use rand::Rng;
+// use rand::Rng;
 use std::net::{SocketAddr, ToSocketAddrs};
-use ring::rand::*;
-
+// use ring::rand::*;
+use libc::{srand, rand};
 pub struct FramesCycleStruct {
     pub repeat_num: usize,
     pub basic_frames: Vec<frame::Frame>,
@@ -191,8 +191,9 @@ impl InputStruct {
                         match *mtu_probe {
                             Some(mtu_probe) => {
                                 let mut mutated_mtu_probe = mtu_probe ;
-                                let mut rng = rand::thread_rng();
-                                mutated_mtu_probe = rng.gen_range(0..=1500);
+                                // let mut rng = rand::thread_rng();
+                                // mutated_mtu_probe = rng.gen_range(0..=1500);
+                                mutated_mtu_probe = unsafe { rand() as usize }%1500 ;
                                 frames.push(frame::Frame::Ping {
                                     mtu_probe: Some(mutated_mtu_probe),
                                 });
@@ -411,9 +412,18 @@ impl InputStruct {
                         let mut mutated_reset_token = reset_token.clone();
                         mutated_seq = *seq_num + i as u64;
                         mutated_retire_prior_to = *retire_prior_to+ i as u64;
+                        for i in (0..quiche::MAX_CONN_ID_LEN){
+                            mutated_cid[i] = unsafe{rand() as u8};
+
+                        }
+                        for i in (0..16){
+                            mutated_reset_token[i] = unsafe{rand() as u8};
+                        }
+                        debug!("mutated_cid: {:?}", mutated_cid);
+
                         
-                        SystemRandom::new().fill( & mut mutated_cid[..]).unwrap();
-                        SystemRandom::new().fill( & mut mutated_reset_token[..]).unwrap();
+                        // SystemRandom::new().fill( & mut mutated_cid[..]).unwrap();
+                        // SystemRandom::new().fill( & mut mutated_reset_token[..]).unwrap();
 
                         // mutated_reset_token = reset_token.clone();
                         frames.push(frame::Frame::NewConnectionId {
@@ -437,7 +447,10 @@ impl InputStruct {
                     } => {
                         let mut mutated_data = data.clone();
                         mutated_data = data.clone();
-                        SystemRandom::new().fill( & mut mutated_data[..]).unwrap();
+                        for i in (0..8) {
+                            mutated_data[i] = unsafe{rand() as u8};
+                        }
+                        // SystemRandom::new().fill( & mut mutated_data[..]).unwrap();
                         frames.push(frame::Frame::PathChallenge {
                             data: mutated_data,
                         });
@@ -447,7 +460,10 @@ impl InputStruct {
                     } => {
                         let mut mutated_data = data.clone();
                         mutated_data = data.clone();
-                        SystemRandom::new().fill( & mut mutated_data[..]).unwrap();
+                        for i in (0..8) {
+                            mutated_data[i] = unsafe{rand() as u8};
+                        }
+                        // SystemRandom::new().fill( & mut mutated_data[..]).unwrap();
                         frames.push(frame::Frame::PathResponse {
                             data: mutated_data,
                         });
@@ -519,11 +535,12 @@ impl InputStruct {
             pkt_resort_type::None => {
             },
             pkt_resort_type::Random => {
-                let mut rng = rand::thread_rng();
+                // let mut rng = rand::thread_rng();
                 let mut i = frames.len();
                 while i > 1 {
                     i -= 1;
-                    let j = rng.gen_range(0..i+1);
+                    // let j = rng.gen_range(0..i+1);
+                    let j = unsafe{rand() as usize}%(i+1);
                     frames.swap(i, j);
                 }
             },

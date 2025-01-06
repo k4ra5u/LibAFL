@@ -50,28 +50,11 @@ where
         || observer.pre_spend_time.as_secs() > 5 
         || observer.post_spend_time.as_secs() > 5
         || observer.post_spend_time.as_millis() / observer.pre_spend_time.as_millis() > 3 {
-            info!("NormalConnFeedback: Interesting testcase: {:?}", _input);
+            info!("NormalConnFeedback: Interesting testcase");
             return Ok(true);
         }
 
         Ok(false)
-    }
-
-    /// Append to the testcase the generated metadata in case of a new corpus item
-    #[inline]
-    fn append_metadata<EM, OT>(
-        &mut self,
-        _state: &mut S,
-        _manager: &mut EM,
-        observers: &OT,
-        testcase: &mut Testcase<S::Input>,
-    ) -> Result<(), Error>
-    where
-        OT: ObserversTuple<S>,
-        EM: EventFirer<State = S>,
-    {
-        let observer = observers.get(&self.observer_handle).unwrap();
-        Ok(())
     }
 
     /// Discard the stored metadata in case that the testcase is not added to the corpus

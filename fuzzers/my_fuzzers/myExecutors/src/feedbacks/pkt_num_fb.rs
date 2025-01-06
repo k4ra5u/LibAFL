@@ -48,7 +48,7 @@ where
         let recv_pkts = observer.get_recv_pkts();
         let send_pkts = observer.get_send_pkts();
         if recv_pkts > 0 && (recv_pkts as f64) / (send_pkts as f64) > 0.9 {
-            info!("Interesting testcase: {:?}", _input);
+            info!("RecvPktNum Interesting testcase");
             return Ok(true);
         }
 
@@ -72,7 +72,7 @@ where
         let recv_pkts = observer.get_recv_pkts();
         let send_pkts = observer.get_send_pkts();
         if recv_pkts > 0 && send_pkts > 0 && recv_pkts / send_pkts > 1 {
-            info!("Appending Interesting testcase: {:?}", testcase);
+            info!("Appending RecvPktNum Interesting testcase");
             // TODO: 根据产生回复的帧判断是否是有用的测试用例，以及如何对测试用例进行剪枝
         }
         Ok(())

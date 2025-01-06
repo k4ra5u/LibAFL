@@ -1,16 +1,30 @@
 use std::borrow::Cow;
+use std::path::absolute;
 use std::time::Duration;
 
 use libafl::inputs::HasMutatorBytes;
 use libafl_bolts::ownedref::OwnedMutPtr;
-use libafl_bolts::{Error, Named,tuples::MatchName};
+use libafl_bolts::tuples::{Handle, Handled};
+use libafl_bolts::{Error, Named,tuples::MatchName,tuples::MatchNameRef};
+use libc::abs;
 use log::{debug, info};
 use serde::{Deserialize, Serialize};
-use libafl::{executors::ExitKind, inputs::UsesInput,observers::Observer, state::UsesState};
+use libafl::{executors::ExitKind, inputs::UsesInput, state::UsesState};
+use libafl::{
+    observers::{DifferentialObserver, Observer, ObserversTuple},
+};
 use quiche::{frame, packet, Connection, ConnectionId, Header};
 use crate::inputstruct::*;
 use crate::misc::*;
 use std::thread::sleep;
+
+#[derive(Debug, Serialize, Deserialize,Clone,PartialEq)]
+pub enum CPUUsageObserverState {
+    OK,
+    FirstCC,
+    SecondCC,
+}
+
 #[derive( Serialize, Deserialize,Debug, Clone)]
 pub struct CPUUsageObserver {
     pub name: Cow<'static, str>,
@@ -18,6 +32,7 @@ pub struct CPUUsageObserver {
     pub cpu_ids: Vec<u32>,
     pub based_cpu_usage: f64,
     pub final_based_cpu_usage: f64,
+    pub final_cpu_usage: f64,
     pub prev_process_time: (u64,u64),
     pub prev_cpu_times: Vec<(u64,u64)>,
     pub record_times: u64,
@@ -36,6 +51,7 @@ impl CPUUsageObserver {
             cpu_ids: Vec::new(),
             based_cpu_usage: 0.0,
             final_based_cpu_usage: 0.0,
+            final_cpu_usage: 0.0,
             prev_process_time: (0,0),
             prev_cpu_times: Vec::new(),
             record_times: 0,
@@ -119,6 +135,9 @@ impl CPUUsageObserver {
     pub fn set_final_based_cpu_usage(&mut self, final_based_cpu_usage: f64) {
         self.final_based_cpu_usage = final_based_cpu_usage;
     }
+    pub fn set_final_cpu_usage(&mut self, final_cpu_usage: f64) {
+        self.final_cpu_usage = final_cpu_usage;
+    }
     pub fn add_frame_record_times(&mut self) {
         self.record_times += 1;
     }
@@ -154,11 +173,15 @@ where
         _input: &S::Input,
         _exit_kind: &ExitKind,
     ) -> Result<(), Error> {
+        let final_cpu_usage = self.get_cur_cpu_usage_imut();
         let mut total_cpu = 0.0;
-        for cpu_usage in self.record_cpu_usages.iter() {
-            total_cpu += cpu_usage;
+        for record_cpu in self.record_cpu_usages.iter() {
+            total_cpu += record_cpu;
         }
-        info!("post_exec of CPUUsageObserver: {:?}", self);
+        let avg_cpu = total_cpu / self.record_times as f64;
+        self.set_final_based_cpu_usage(avg_cpu);
+        self.set_final_cpu_usage(final_cpu_usage);
+        info!("post_exec of CPUUsageObserver: {:?},{:?}", self.name,self.final_based_cpu_usage);
         Ok(())
     }
 }
@@ -166,5 +189,105 @@ where
 impl Named for CPUUsageObserver {
     fn name(&self) -> &Cow<'static, str> {
         &self.name
+    }
+}
+
+#[allow(clippy::unsafe_derive_deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DifferentialCPUUsageObserver {
+
+    first_name: Cow<'static, str>,
+    second_name: Cow<'static, str>,
+    first_ob_ref: Handle<CPUUsageObserver>,
+    second_ob_ref: Handle<CPUUsageObserver>,
+    first_observer: CPUUsageObserver,
+    second_observer: CPUUsageObserver,
+    name: Cow<'static, str>,
+    judge_type: CPUUsageObserverState,
+}
+
+impl DifferentialCPUUsageObserver {
+    /// Create a new `DifferentialCPUUsageObserver`.
+    pub fn new (
+        first: &mut CPUUsageObserver,
+        second: &mut CPUUsageObserver,
+    ) -> Self {
+        Self {
+            first_name: first.name().clone(),
+            second_name: second.name().clone(),
+            name: Cow::from(format!("differential_{}_{}", first.name(), second.name())),
+            first_ob_ref: first.handle(),
+            second_ob_ref: second.handle(),
+            first_observer: CPUUsageObserver::new("fake"),
+            second_observer: CPUUsageObserver::new("fake"),
+            judge_type: CPUUsageObserverState::OK,
+        }
+    }
+
+    pub fn first_name(&self) -> &str {
+        &self.first_name
+    }
+
+    pub fn second_name(&self) -> &str {
+        &self.second_name
+    }
+    pub fn judge_type(&self) -> &CPUUsageObserverState {
+        &self.judge_type
+    }
+    pub fn perform_judge(&mut self) {
+        let first_cpu_usage = self.first_observer.final_based_cpu_usage;
+        let second_cpu_usage = self.second_observer.final_based_cpu_usage;
+        if first_cpu_usage > second_cpu_usage && first_cpu_usage - second_cpu_usage > 40.0 {
+            self.judge_type = CPUUsageObserverState::FirstCC;
+        } else if second_cpu_usage > first_cpu_usage && second_cpu_usage - first_cpu_usage > 40.0 {
+            self.judge_type = CPUUsageObserverState::SecondCC;
+        } else {
+            self.judge_type = CPUUsageObserverState::OK;
+        }
+        self.first_observer = CPUUsageObserver::new("fake");
+        self.second_observer = CPUUsageObserver::new("fake");
+
+    }
+}
+
+impl Named for DifferentialCPUUsageObserver {
+    fn name(&self) -> &Cow<'static, str> {
+        &self.name
+    }
+}
+
+impl<S> Observer<S> for DifferentialCPUUsageObserver where S: UsesInput {}
+
+impl< OTA, OTB, S> DifferentialObserver<OTA, OTB, S>
+    for DifferentialCPUUsageObserver
+where
+    OTA: ObserversTuple<S>,
+    OTB: ObserversTuple<S>,
+    S: UsesInput,
+{
+    fn pre_observe_first(&mut self, _: &mut OTA) -> Result<(), Error> {
+        self.judge_type = CPUUsageObserverState::OK;
+        Ok(())
+    }
+
+    fn pre_observe_second(&mut self, _: &mut OTB) -> Result<(), Error> {
+        self.judge_type = CPUUsageObserverState::OK;
+        Ok(())
+    }
+    fn post_observe_first(&mut self, observers: &mut OTA) -> Result<(), Error> {
+        let first_observer = observers.get(&self.first_ob_ref).unwrap();
+        self.first_observer = first_observer.clone();
+        if self.second_observer.name() != "fake" {
+            self.perform_judge();
+        }
+        Ok(())
+    }
+    fn post_observe_second(&mut self, observers: &mut OTB) -> Result<(), Error> {
+        let second_observer = observers.get(&self.second_ob_ref).unwrap();
+        self.second_observer = second_observer.clone();
+        if self.first_observer.name() != "fake" {
+            self.perform_judge();
+        }
+        Ok(())
     }
 }

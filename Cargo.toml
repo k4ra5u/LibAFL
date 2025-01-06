@@ -21,8 +21,11 @@ members = [
     "utils/libafl_benches",
     "utils/gramatron/construct_automata",
     "utils/desyscall",
-    "utils/multi_machine_generator","fuzzers/my_fuzzers/my_UDP_fuzzer_test_with_libafl_cc", "fuzzers/my_fuzzers/gen_testcase","fuzzers/baby_fuzzer_swap_differential"
-, "fuzzers/my_fuzzers/my_UDP_fuzzer_test_with_libafl_cc_Diff", "fuzzers/my_fuzzers/check_corpus", "fuzzers/my_fuzzers/fuzzer_only_corpus", "fuzzers/my_fuzzers/vul_crypto", "fuzzers/my_fuzzers/vul_cid", "fuzzers/my_fuzzers/vul_pc"]
+    "utils/multi_machine_generator",
+    "fuzzers/my_fuzzers/gen_testcase",
+    "fuzzers/my_fuzzers/my_UDP_fuzzer_test_with_libafl_cc_Diff",
+    "fuzzers/my_fuzzers/check_corpus", 
+    "fuzzers/my_fuzzers/fuzzer_only_corpus",]
 default-members = [
     "libafl",
     "libafl_bolts",

@@ -1,4 +1,4 @@
-use core::time::Duration;
+use std::time::{SystemTime, UNIX_EPOCH, Duration};
 use std::path::PathBuf;
 
 use clap::Parser;
@@ -13,13 +13,11 @@ use libafl_bolts::{
     tuples::{tuple_list, Handled, MatchNameRef, Merge},
     AsSliceMut, Truncate,
 };
-use nix::sys::signal::Signal;
+use nix::libc::{rand, seccomp_notif_addfd};
+use nix::{libc::srand, sys::signal::Signal};
+use rand::Rng;
 use mylibafl::{
-    executors::NetworkRestartExecutor, 
-    mutators::quic_mutations, 
-    inputstruct::QuicStruct,
-    observers::*,
-    feedbacks::*,
+    executors::NetworkRestartExecutor, feedbacks::*, inputstruct::QuicStruct, mutators::quic_mutations, observers::*, schedulers::MCTSScheduler
 };
 use libafl_targets::{edges_max_num, DifferentialAFLMapSwapObserver};
 
@@ -79,6 +77,8 @@ static mut SHMEM_EDGE_MAP: Option<UnixShMem> = None;
 
 pub fn main() {
     std::env::set_var("RUST_LOG", "info");
+    std::env::set_var("START_DIR", "/home/john/Desktop/cjj_related/testing_new/fuzzing-test/LibAFL/fuzzers/my_fuzzers/my_UDP_fuzzer_test_with_libafl_cc_Diff/start");
+    std::env::set_var("JUDGE_DIR", "/home/john/Desktop/cjj_related/testing_new/fuzzing-test/LibAFL/fuzzers/my_fuzzers/my_UDP_fuzzer_test_with_libafl_cc_Diff/judge");
     std::env::set_var("SSLKEYLOGFILE", "/home/john/Desktop/cjj_related/quic-go/example/key.log");
     env_logger::init();
     const MAP_SIZE: usize = 65536;
@@ -89,49 +89,60 @@ pub fn main() {
         SHMEM_EDGE_MAP = Some(shmem_provider.new_shmem(65536).unwrap());
     }
 
-    let time_observer = TimeObserver::new("time");
-    // let mut first_shmem = shmem_provider.new_shmem(MAP_SIZE).unwrap();
-    // first_shmem.write_to_env("__AFL_SHM_ID").unwrap();
-    // let first_shmem_buf = first_shmem.as_slice_mut();
-
-    // let first_edges_observer = unsafe {
-    //     HitcountsMapObserver::new(StdMapObserver::new("first_shared_mem", first_shmem_buf)).track_indices()
-    // };
-    // let first_time_observer = TimeObserver::new("first_time");
-    // let first_recv_pkt_num_observer = RecvPktNumObserver::new("first_recv_pkt_num");
-
-    // let mut first_feedback = feedback_or!(
-    //     MaxMapFeedback::new(&first_edges_observer),
-    //     TimeFeedback::new(&first_time_observer),
-    //     RecvPktNumFeedback::new(&first_recv_pkt_num_observer)
-    // );
-
-    // let mut second_shmem = shmem_provider.new_shmem(MAP_SIZE).unwrap();
-    // second_shmem.write_to_env("__AFL_SHM_ID").unwrap();
-    // let second_shmem_buf = second_shmem.as_slice_mut();
-
-    // let second_edges_observer = unsafe {
-    //     HitcountsMapObserver::new(StdMapObserver::new("second_shared_mem", second_shmem_buf)).track_indices()
-    // };
-    // let second_time_observer = TimeObserver::new("second_time");
-    // let second_recv_pkt_num_observer = RecvPktNumObserver::new("second_recv_pkt_num");
-
-    // let mut second_feedback = feedback_or!(
-    //     MaxMapFeedback::new(&second_edges_observer),
-    //     TimeFeedback::new(&second_time_observer),
-    //     RecvPktNumFeedback::new(&second_recv_pkt_num_observer)
-    // );
+    let first_time_observer = TimeObserver::new("time");
+    let first_recv_pkt_num_observer = RecvPktNumObserver::new("recv_pkt_num");
+    let mut first_conn_observer = NormalConnObserver::new("conn","127.0.0.1".to_owned(),58443,"myserver.xx".to_owned());
+    let mut first_cc_time_observer = CCTimesObserver::new("cc_time");
+    let mut first_cpu_usage_observer = CPUUsageObserver::new("first_cpu_usage");
+    let mut first_ctrl_observer = RecvControlFrameObserver::new("ctrl");
+    let mut first_data_observer = RecvDataFrameObserver::new("data");
+    let mut first_ack_observer = ACKRangeObserver::new("ack");
+    let mut first_mem_observer = MemObserver::new("mem");
+    let mut first_ucb_observer = UCBObserver::new("ucb1");
 
 
-    let recv_pkt_num_observer = RecvPktNumObserver::new("recv_pkt_num");
 
-    let mut objective = feedback_and_fast!(
-        CrashFeedback::new(),
-    );
+    let second_time_observer = TimeObserver::new("time");
+    let second_recv_pkt_num_observer = RecvPktNumObserver::new("recv_pkt_num");
+    let mut second_conn_observer = NormalConnObserver::new("conn","127.0.0.1".to_owned(),58443,"myserver.xx".to_owned());
+    let mut second_cc_time_observer = CCTimesObserver::new("cc_time");
+    let mut second_cpu_usage_observer = CPUUsageObserver::new("second_cpu_usage");
+    let mut second_ctrl_observer = RecvControlFrameObserver::new("ctrl");
+    let mut second_data_observer = RecvDataFrameObserver::new("data");
+    let mut second_ack_observer = ACKRangeObserver::new("ack");
+    let mut second_mem_observer = MemObserver::new("mem");
+    let mut second_ucb_observer = UCBObserver::new("ucb2");
+
+    
+
+
+    let diff_cc_ob = DifferentialCCTimesObserver::new(&mut first_cc_time_observer, &mut second_cc_time_observer);
+    let diff_cpu_ob = DifferentialCPUUsageObserver::new(&mut first_cpu_usage_observer, &mut second_cpu_usage_observer);
+    let diff_ctrl_ob = DifferentialRecvControlFrameObserver::new(&mut first_ctrl_observer, &mut second_ctrl_observer);
+    let diff_data_ob = DifferentialRecvDataFrameObserver::new(&mut first_data_observer, &mut second_data_observer);
+    let diff_ack_ob = DifferentialACKRangeObserver::new(&mut first_ack_observer, &mut second_ack_observer);
+    let diff_mem_ob = DifferentialMemObserver::new(&mut first_mem_observer, &mut second_mem_observer);
+
+
+    let scheduler =  MCTSScheduler::new(&first_ucb_observer);
+    // let diff_fb = DiffFeedback::new(name, o1, o2, compare_fn);
+    let first_normal_conn_fb = NormalConnFeedback::new(&first_conn_observer);
+    let second_normal_conn_fb = NormalConnFeedback::new(&second_conn_observer);
+
+
     let mut feedback = feedback_or!(
-        TimeFeedback::new(&time_observer),
-        RecvPktNumFeedback::new(&recv_pkt_num_observer)
-    );
+        CrashFeedback::new(),
+
+        // TimeFeedback::new(&time_observer),
+        // RecvPktNumFeedback::new(&recv_pkt_num_observer),
+        UCBFeedback::new(&first_ucb_observer),
+    );    
+    let mut objective = feedback_or!(
+        CrashFeedback::new(),
+        DifferFeedback::new(&diff_cc_ob, &diff_cpu_ob, &diff_mem_ob, &diff_ctrl_ob, &diff_data_ob, &diff_ack_ob),
+        first_normal_conn_fb,
+        second_normal_conn_fb,
+    ); 
 
     let mut state = StdState::new(
         StdRand::with_seed(0),
@@ -147,35 +158,69 @@ pub fn main() {
     });
     let mut mgr = SimpleEventManager::new(monitor);
 
-    let scheduler =  QueueScheduler::new();
+    let mut fuzzer = StdFuzzer::new(scheduler, feedback, objective);  
 
-    let mut fuzzer = StdFuzzer::new(scheduler, feedback, objective);
-    let observers = tuple_list!(
-        time_observer,
-        recv_pkt_num_observer,
+    let first_observers = tuple_list!(
+        first_time_observer,
+        first_recv_pkt_num_observer,
+        first_ucb_observer,
+        first_conn_observer,
+        first_cc_time_observer,
+        first_cpu_usage_observer,
+        first_ctrl_observer,
+        first_data_observer,
+        first_ack_observer,
+        first_mem_observer,
+        );
+
+    let second_observers = tuple_list!(
+        second_time_observer,
+        second_recv_pkt_num_observer,
+        second_ucb_observer,
+        second_conn_observer,
+        second_cc_time_observer,
+        second_cpu_usage_observer,
+        second_ctrl_observer,
+        second_data_observer,
+        second_ack_observer,
+        second_mem_observer,
+        );
+    let diff_observers = tuple_list!(
+        diff_cc_ob,
+        diff_cpu_ob,
+        diff_ctrl_ob,
+        diff_data_ob,
+        diff_ack_ob,
+        diff_mem_ob,
     );
-    let mut first_executor = NetworkRestartExecutor::new(observers.clone(),shmem_provider.clone())
-        .start_command("/home/john/Desktop/cjj_related/testing_new/fuzzing-test/LibAFL/fuzzers/my_fuzzers/my_UDP_fuzzer_test_with_libafl_cc_Diff/start.sh".to_owned())
-        .judge_command("/home/john/Desktop/cjj_related/testing_new/fuzzing-test/LibAFL/fuzzers/my_fuzzers/my_UDP_fuzzer_test_with_libafl_cc_Diff/judge.sh".to_owned())
+
+    let mut rng = rand::thread_rng();
+    let frame_rand_seed = rng.gen();
+    unsafe { srand(frame_rand_seed) };
+    let mut first_executor = NetworkRestartExecutor::new(first_observers,shmem_provider.clone())
+        .start_command("h2o.sh".to_owned())
+        .judge_command("h2o-judge.sh".to_owned())
         .port(58443)
         .timeout(Duration::from_millis(1000))
         .coverage_map_size(MAP_SIZE)
+        .set_frame_seed(frame_rand_seed)
         .build_quic_struct("myserver.xx".to_owned(),58443, "127.0.0.1".to_owned())
         .build();
 
-    let mut second_executor = NetworkRestartExecutor::new(observers.clone(),shmem_provider.clone())
-    .start_command("/home/john/Desktop/cjj_related/testing_new/fuzzing-test/LibAFL/fuzzers/my_fuzzers/my_UDP_fuzzer_test_with_libafl_cc_Diff/start.sh".to_owned())
-    .judge_command("/home/john/Desktop/cjj_related/testing_new/fuzzing-test/LibAFL/fuzzers/my_fuzzers/my_UDP_fuzzer_test_with_libafl_cc_Diff/judge.sh".to_owned())
+    let mut second_executor = NetworkRestartExecutor::new(second_observers,shmem_provider.clone())
+    .start_command("aioquic.sh".to_owned())
+    .judge_command("aioquic-judge.sh".to_owned())
     .port(58440)
     .timeout(Duration::from_millis(1000))
     .coverage_map_size(MAP_SIZE)
+    .set_frame_seed(frame_rand_seed)
     .build_quic_struct("myserver.xx".to_owned(),58440, "127.0.0.1".to_owned())
     .build();
 
     let mut differential_executor = DiffExecutor::new(
         first_executor,
         second_executor,
-        tuple_list!(),
+        diff_observers,
     );   
 
     if state.must_load_initial_inputs() {

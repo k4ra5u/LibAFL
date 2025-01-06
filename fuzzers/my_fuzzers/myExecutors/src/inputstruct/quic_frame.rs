@@ -459,7 +459,8 @@ pub fn handshake_done(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Error> 
     if frame_len > len {
         frame_len = len;
     }
-    let frame = frame::Frame::HandshakeDone;
+    // let frame = frame::Frame::HandshakeDone;
+    let frame = frame::Frame::Padding { len:100 };
     Ok(frame)
 }
 
@@ -473,6 +474,10 @@ pub fn datagram(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Error> {
     let data = buf.to_vec();
 
     let frame = frame::Frame::Datagram { data };
+    Ok(frame)
+}
+pub fn other(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Error> {
+    let frame = frame::Frame::Others { data: buf.to_vec() }; ;
     Ok(frame)
 }
 
@@ -506,6 +511,7 @@ pub fn gen_quic_frame(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Error> 
         22 => application_close(&mut frame_buf,len),
         23 => handshake_done(&mut frame_buf,len),
         24 => datagram(&mut frame_buf,len),
+        25 => other(&mut frame_buf,len),
         _ => Err(Error::BufferTooShort),
     }
 }

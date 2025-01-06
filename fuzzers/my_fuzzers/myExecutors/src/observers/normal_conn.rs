@@ -361,7 +361,7 @@ impl NormalConnObserver {
             // Generate outgoing QUIC packets and send them on the UDP socket, until
             // quiche reports that there are no more packets to be sent.
             let local_addr = socket.local_addr().unwrap();
-            info!("{:?} -> {:?}", local_addr,peer_addr);
+            debug!("{:?} -> {:?}", local_addr,peer_addr);
             for peer_addr in conn.paths_iter(local_addr) {
                 loop {
                     let (write, send_info) = match conn.send_on_path(
@@ -479,7 +479,7 @@ where
         _exit_kind: &ExitKind,
     ) -> Result<(), Error> {
         self.calc_post_spend_time();
-        info!("post_exec of NormalConnObserver: {:?}", self);
+        debug!("post_exec of NormalConnObserver: {:?}", self);
         Ok(())
     }
 }

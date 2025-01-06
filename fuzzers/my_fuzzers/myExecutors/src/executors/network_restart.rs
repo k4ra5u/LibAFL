@@ -1,10 +1,12 @@
 use std::{
-    any::Any, env, ffi::{OsStr, OsString}, io::{self, prelude::*, ErrorKind, Read, Write}, os::{
+    any::Any, env, ffi::{OsStr, OsString}, fs::File, io::{self, prelude::*, BufRead, ErrorKind, Read, Write}, os::{
         fd::{AsRawFd, BorrowedFd},
         unix::{io::RawFd, process::CommandExt},
     }, path::Path, process::{Child, Command, Output, Stdio}, str, thread::sleep, time::Duration, vec
 };
 use std::num::ParseIntError;
+use rand::Rng;
+use libc::{rand, srand, ETH_DATA_LEN};
 use libc::{CODA_SUPER_MAGIC, ERA};
 use nix::{
     sys::{
@@ -27,12 +29,11 @@ use libafl::{
 use libafl_bolts::{
     rands, shmem::{ShMem, ShMemProvider, UnixShMemProvider}, tuples::{Handle, Handled,MatchName ,MatchNameRef, Prepend, RefIndexable}, AsSlice, AsSliceMut, Truncate
 };
-use rand::Rng;
 use std::net::{SocketAddr, ToSocketAddrs};
 use ring::rand::*;
 use log::{error, info,debug,warn};
 
-use quiche::{frame, packet, Connection, ConnectionId, Error, Header};
+use quiche::{frame::{self, EcnCounts, Frame, MAX_STREAM_SIZE}, packet, ranges::{self, RangeSet}, stream, Connection, ConnectionId, Error, FrameWithPkn, Header};
 
 use crate::inputstruct::{pkt_resort_type, quic_input::InputStruct_deserialize, FramesCycleStruct, InputStruct, QuicStruct};
 use crate::observers::*;
@@ -66,6 +67,7 @@ where SP: ShMemProvider,
     pub quic_st: Option<QuicStruct>,
     pub recv_pkts: usize,
     pub non_res_times: usize,
+    pub frame_rand_seed: u32,
 }
 
 pub struct NetworkRestartExecutorBuilder<'a,SP>
@@ -84,6 +86,7 @@ where SP: ShMemProvider,
     shmem_provider: &'a mut SP,
     pid: i32,
     quic_st: Option<QuicStruct>,
+    frame_rand_seed: u64,
 }
 
 
@@ -120,17 +123,22 @@ SP: ShMemProvider,
             quic_st:None,
             recv_pkts:0,
             non_res_times:0,
+            frame_rand_seed:0,
         }
     }
 
     pub fn start_command(mut self,str:String) -> Self {
-        self.start_command = str;
+        let base_dir = env::var("START_DIR").unwrap();
+        self.start_command = format!("{base_dir}/{str}");
+        info!("start_command: {:?}",self.start_command);
         self
 
     }
 
     pub fn judge_command(mut self,str:String) -> Self {
-        self.judge_command = str;
+        let base_dir = env::var("JUDGE_DIR").unwrap();
+        self.judge_command = format!("{base_dir}/{str}");
+        info!("judge_command: {:?}",self.judge_command);
         self
     }
 
@@ -149,6 +157,10 @@ SP: ShMemProvider,
         self
     }
 
+    pub fn set_frame_seed(mut self, seed: u32) -> Self {
+        self.frame_rand_seed = seed;
+        self
+    }
     pub fn change_recv_pkts(&mut self, nums:usize)  {
         self.recv_pkts = nums;
     }
@@ -203,8 +215,30 @@ SP: ShMemProvider,
         }
     }
 
-    pub fn inital_cpu_usage_obs(&mut self) {
-        let cpu_usage_observer_ref = CPUUsageObserver::new("cpu_usage").handle();
+    pub fn set_initial_mem_usage(&mut self) {
+        let mem_observer_ref = MemObserver::new("mem").handle();
+        if let Some(mem_observer) = self.observers.get_mut(&mem_observer_ref) {
+            if self.pid != mem_observer.pid {
+                mem_observer.initial_mem = 0;
+                mem_observer.set_pid(self.pid);
+                let map_file = format!("/proc/{}/maps", mem_observer.pid);
+                let file = File::open(map_file).unwrap();
+                let reader = io::BufReader::new(file);
+                for cur_line in reader.lines() {
+                    let line = cur_line.unwrap();
+                    if let Some((start, end)) = mem_observer.parse_rw_memory_range(&line) {
+                        mem_observer.initial_mem += end - start;
+                    }
+                }
+                mem_observer.before_mem = mem_observer.initial_mem;
+            }
+        }
+    }
+
+    pub fn inital_first_cpu_usage_obs(&mut self)  {
+
+        let cpu_usage_observer = CPUUsageObserver::new("first_cpu_usage");
+        let cpu_usage_observer_ref = cpu_usage_observer.handle();
         if let Some(cpu_usage_observer) = self.observers.get_mut(&cpu_usage_observer_ref) {
             cpu_usage_observer.set_pid(self.pid as u32);
             cpu_usage_observer.add_cpu_id(20);
@@ -216,8 +250,33 @@ SP: ShMemProvider,
         }
     }
 
-    pub fn update_cpu_usage_obs(&mut self,cur_cpu_usages: Vec<f64>) {
-        let cpu_usage_observer_ref = CPUUsageObserver::new("cpu_usage").handle();
+    pub fn inital_second_cpu_usage_obs(&mut self)   {
+
+        let cpu_usage_observer = CPUUsageObserver::new("second_cpu_usage");
+        let cpu_usage_observer_ref = cpu_usage_observer.handle();
+        if let Some(cpu_usage_observer) = self.observers.get_mut(&cpu_usage_observer_ref) {
+            cpu_usage_observer.set_pid(self.pid as u32);
+            cpu_usage_observer.add_cpu_id(20);
+            cpu_usage_observer.add_cpu_id(21);
+            // cpu_usage_observer.add_cpu_id(22);
+            // cpu_usage_observer.add_cpu_id(23);
+            let based_cpu_usage = cpu_usage_observer.get_cur_cpu_usage();
+            cpu_usage_observer.set_based_cpu_usage(based_cpu_usage);
+        }
+    }
+
+    pub fn get_first_cpu_usage_ob_mut (&mut self) -> &mut CPUUsageObserver {
+        let cpu_usage_observer_ref = CPUUsageObserver::new("first_cpu_usage").handle();
+        self.observers.get_mut(&cpu_usage_observer_ref).unwrap()
+    }
+    pub fn get_second_cpu_usage_ob_mut (&mut self) -> &mut CPUUsageObserver {
+        let cpu_usage_observer_ref = CPUUsageObserver::new("second_cpu_usage").handle();
+        self.observers.get_mut(&cpu_usage_observer_ref).unwrap()
+    }
+
+
+    pub fn update_first_cpu_usage_obs(&mut self,cur_cpu_usages: Vec<f64>) {
+        let cpu_usage_observer_ref = CPUUsageObserver::new("first_cpu_usage").handle();
         if let Some(cpu_usage_observer) = self.observers.get_mut(&cpu_usage_observer_ref) {
             for cur_cpu_usage in cur_cpu_usages.iter() {
                 cpu_usage_observer.add_record_cpu_usage(*cur_cpu_usage);
@@ -229,6 +288,165 @@ SP: ShMemProvider,
             }
         }
     }
+    pub fn update_second_cpu_usage_obs(&mut self,cur_cpu_usages: Vec<f64>) {
+        let cpu_usage_observer_ref = CPUUsageObserver::new("second_cpu_usage").handle();
+        if let Some(cpu_usage_observer) = self.observers.get_mut(&cpu_usage_observer_ref) {
+            for cur_cpu_usage in cur_cpu_usages.iter() {
+                cpu_usage_observer.add_record_cpu_usage(*cur_cpu_usage);
+                cpu_usage_observer.add_frame_record_times();
+                let curr_process_time = get_process_cpu_time(cpu_usage_observer.pid).expect("Failed to get process CPU time");
+                let curr_cpu_times = get_cpu_time(&cpu_usage_observer.cpu_ids).expect("Failed to get CPU core times");
+                cpu_usage_observer.prev_cpu_times = curr_cpu_times.clone();
+                cpu_usage_observer.prev_process_time = curr_process_time;
+            }
+        }
+    }
+
+    pub fn cc_observer_update(&mut self, pkn:u64,error_code:u64,frame_type:u64,reason:Vec<u8>) {
+        let cc_times_observer_ref = CCTimesObserver::new("cc_time").handle();
+        if let Some(cc_times_observer) = self.observers.get_mut(&cc_times_observer_ref) {
+            cc_times_observer.pkn = pkn;
+            cc_times_observer.error_code = error_code;
+            cc_times_observer.frame_type = frame_type;
+            cc_times_observer.reason = reason;
+        }
+    }
+
+    pub fn ack_observer_add_range(&mut self, ranges:RangeSet) {
+        let ack_observer_ref = ACKRangeObserver::new("ack").handle();
+        if let Some(ack_observer) = self.observers.get_mut(&ack_observer_ref) {
+            ranges.iter().for_each(|range| {
+                ack_observer.add_ACK_range(range.start, range.end);
+            });
+        }
+    }
+    pub fn ctrl_observer_add_frame(&mut self, frames:Vec<Frame>) {
+        let ctrl_observer_ref = RecvControlFrameObserver::new("ctrl").handle();
+        if let Some(ctrl_observer) = self.observers.get_mut(&ctrl_observer_ref) {
+            for frame in frames.iter() {
+                ctrl_observer.add_frame_list(frame.clone());
+            }
+        }
+    }
+
+    pub fn data_observer_add_frame(&mut self, 
+                                    crypto_frames:Vec<FrameWithPkn>,
+                                    stream_frames:Vec<FrameWithPkn>,
+                                    pr_frames:Vec<FrameWithPkn>,
+                                    dgram_frames:Vec<FrameWithPkn>) {
+        let data_observer_ref = RecvDataFrameObserver::new("data").handle();
+        if let Some(data_observer) = self.observers.get_mut(&data_observer_ref) {
+            for frame in crypto_frames.iter() {
+                data_observer.add_crypto_frame_list(frame.clone());
+            }
+            for frame in stream_frames.iter() {
+                data_observer.add_stream_frame_list(frame.clone());
+            }
+            for frame in pr_frames.iter() {
+                data_observer.add_pr_frame_list(frame.clone());
+            }
+            for frame in dgram_frames.iter() {
+                data_observer.add_dgram_frame_list(frame.clone());
+            }
+        }
+    }
+
+    pub fn handle_frames(&mut self, recv_frames:Vec<FrameWithPkn>) {
+        let mut ctrl_frames: Vec<Frame> = Vec::new();
+        let mut crypto_frames: Vec<FrameWithPkn> = Vec::new();
+        let mut stream_frames: Vec<FrameWithPkn> = Vec::new();
+        let mut pr_frames: Vec<FrameWithPkn> = Vec::new();
+        let mut dgram_frames: Vec<FrameWithPkn> = Vec::new();
+        let mut cc_times = 0;
+        for recv_frame in recv_frames.iter() {
+            match &recv_frame.frame {
+                frame::Frame::Padding { .. } => (),
+                frame::Frame::Ping { .. } => (),
+                frame::Frame::ACK { ranges,ack_delay,ecn_counts } => {
+                    self.ack_observer_add_range(ranges.clone());
+                    ranges.iter().for_each(|range| {
+                        debug!("ack range: {:?}", range);
+                    });
+                },
+                frame::Frame::ResetStream{ .. } => {
+                    ctrl_frames.push(recv_frame.frame.clone());
+                },
+                frame::Frame::StopSending{ .. } => {
+                    ctrl_frames.push(recv_frame.frame.clone());
+                },
+                frame::Frame::Crypto{ data } => {
+                    crypto_frames.push(recv_frame.clone());
+                },
+                frame::Frame::NewToken{ .. } => {
+                    ctrl_frames.push(recv_frame.frame.clone());
+                },
+                frame::Frame::Stream{ data,stream_id } => {
+                    stream_frames.push(recv_frame.clone());
+                },
+                frame::Frame::MaxData{ .. } => {
+                    ctrl_frames.push(recv_frame.frame.clone());
+                },
+                frame::Frame::MaxStreamData{ .. } => {
+                    ctrl_frames.push(recv_frame.frame.clone());
+                },
+                frame::Frame::MaxStreamsBidi{ .. } => {
+                    ctrl_frames.push(recv_frame.frame.clone());
+                },
+                frame::Frame::DataBlocked{ .. } => {
+                    ctrl_frames.push(recv_frame.frame.clone());
+                },
+                frame::Frame::StreamDataBlocked{ .. } => {
+                    ctrl_frames.push(recv_frame.frame.clone());
+                },
+                frame::Frame::StreamsBlockedBidi{ .. } => {
+                    ctrl_frames.push(recv_frame.frame.clone());
+                },
+                frame::Frame::NewConnectionId{ .. } => {
+                    ctrl_frames.push(recv_frame.frame.clone());
+                },
+                frame::Frame::RetireConnectionId{ .. } => {
+                    ctrl_frames.push(recv_frame.frame.clone());
+                },
+                frame::Frame::PathChallenge{ .. } => {
+                    ctrl_frames.push(recv_frame.frame.clone());
+                },
+                frame::Frame::PathResponse{ data } => {
+                    pr_frames.push(recv_frame.clone());
+                },
+                frame::Frame::ConnectionClose{ error_code,frame_type,reason } => {
+                    self.cc_observer_update(recv_frame.pkn,*error_code,*frame_type,reason.clone());
+                },
+                frame::Frame::ApplicationClose{ error_code,reason } => {
+                    self.cc_observer_update(recv_frame.pkn,*error_code,0,reason.clone());
+                },
+                frame::Frame::HandshakeDone => {
+                    ctrl_frames.push(recv_frame.frame.clone());
+                },
+                frame::Frame::Datagram{ data } => {
+                    dgram_frames.push(recv_frame.clone());
+                },
+                frame::Frame::DatagramHeader{ length} => {
+                    ctrl_frames.push(recv_frame.frame.clone());
+                },
+                frame::Frame::CryptoHeader{ offset,length }  => {
+                    ctrl_frames.push(recv_frame.frame.clone());
+                },
+                frame::Frame::Others{ .. }  => (),
+                frame::Frame::StreamHeader { stream_id, offset, length, fin } => {
+                    ctrl_frames.push(recv_frame.frame.clone());
+                },
+                frame::Frame::MaxStreamsUni { max } => {
+                    ctrl_frames.push(recv_frame.frame.clone());
+                },
+                frame::Frame::StreamsBlockedUni { limit } => {
+                    ctrl_frames.push(recv_frame.frame.clone());
+                },
+            }
+        }
+        self.ctrl_observer_add_frame(ctrl_frames);
+        self.data_observer_add_frame(crypto_frames,stream_frames,pr_frames,dgram_frames);
+    }
+
 
     pub fn build_quic_struct(mut self, server_name: String, server_port: u16, server_host: String) -> Self {
 
@@ -271,7 +489,6 @@ SP: ShMemProvider,
 
     pub fn judge_server_status(&self) -> i32 {
 
-        //println!("Judge server status {}", self.judge_command);
         let output = std::process::Command::new(&self.judge_command)
         .output()
         .expect("Failed to execute command");
@@ -280,6 +497,7 @@ SP: ShMemProvider,
         if output.status.success() {
             // 处理标准输出
             let stdout = str::from_utf8(&output.stdout).expect("Invalid UTF-8 in stdout");
+            debug!("Command executed successfully:\n{}", stdout);
             // println!("Command executed successfully:\n{}", stdout);
             match stdout.trim().parse::<i32>() {
                 Ok(value) => return value,
@@ -349,7 +567,16 @@ where
         input: &Self::Input,
     ) -> Result<libafl::prelude::ExitKind, libafl::prelude::Error> {
         //let mut observers: RefIndexable<&mut OT, OT> = self.observers_mut();
-        info!("now {:?} corpus",state.corpus().count());
+        // info!("now seed:{:?}",self.frame_rand_seed);
+        unsafe { srand(self.frame_rand_seed); }
+        self.frame_rand_seed = unsafe {rand().try_into().unwrap()};
+        // info!("now {:?} corpus",state.corpus().count());
+        info!("running corpus: {:?}", state.corpus().current());
+        let mut is_first = false;
+        if self.start_command.contains("h2o.sh") {
+            is_first = true;
+        }
+        
         //let mut recv_pkt_num_observer = None;
         // for observer in observers.iter() {
         //     if let Some(recv_pkt_num_observer) = observer.downcast_mut::<RecvPktNumObserver>() {}
@@ -366,13 +593,23 @@ where
         let mut total_recv_pkts = 0;
         let mut total_recv_bytes = 0;
         let mut cur_cpu_usages: Vec<f64> = Vec::new();
+        let mut total_recv_frames: Vec<FrameWithPkn> = Vec::new();
         *state.executions_mut() += 1;
         for (key, value) in &self.envs {
             std::env::set_var(key, value);
         }
         let res = self.judge_server_status();
+        // 快照功能不完善，目前每次fuzz重启服务
+        if res !=0 {
+            std::process::Command::new("sh").arg("-c").arg(format!("kill -9 {}",res))
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap();
+        }
+        let res = self.judge_server_status();
         // 如果服务未启动，则启动服务
-        warn!("non_res_times:{:?} recv_pkts:{:?}",self.non_res_times,self.recv_pkts);
+        // warn!("non_res_times:{:?} recv_pkts:{:?}",self.non_res_times,self.recv_pkts);
         if res == 0 || self.pid == 0 {
             std::process::Command::new("sh").arg("-c").arg(&self.start_command)
             .stdout(Stdio::null())
@@ -383,31 +620,44 @@ where
         
         let pid = self.judge_server_status();
         self.pid = pid;
-        self.inital_cpu_usage_obs();
-        
-        // cpu_usage_observer.set_pid(self.pid as u32);
-        // cpu_usage_observer.add_cpu_id(20);
-        // cpu_usage_observer.add_cpu_id(21);
-        // cpu_usage_observer.add_cpu_id(22);
-        // cpu_usage_observer.add_cpu_id(23);
-        // let based_cpu_usage = cpu_usage_observer.get_cur_cpu_usage();
-        // cpu_usage_observer.set_based_cpu_usage(based_cpu_usage);
 
+        self.set_initial_mem_usage();
+
+         if is_first {
+            self.inital_first_cpu_usage_obs();
+            // self.get_first_cpu_usage_ob_mut()
+        } else {
+            self.inital_second_cpu_usage_obs();
+            // self.get_first_cpu_usage_ob_mut();
+        };
+    
         //quic_st 必须存在，检查 quic_st 合法性
         let mut valid_quic_st = false;
         if let Some(quic_st) = self.quic_st.as_ref() {
             valid_quic_st = quic_st.judge_conn_status();
         } 
         if valid_quic_st == false || self.non_res_times >= 3{
-            error!("judged connection closed");
+            debug!("judged connection closed");
             self.rebuild_quic_struct();
             self.change_non_res_times(0);
             self.change_recv_pkts(0);
         }
         
         let mut quic_st = self.quic_st.as_mut().unwrap();
-        let cpu_usage_observer_ref = CPUUsageObserver::new("cpu_usage").handle();
+        let cpu_usage_observer_ref = if is_first {
+            CPUUsageObserver::new("first_cpu_usage").handle()
+        } else {
+            CPUUsageObserver::new("second_cpu_usage").handle()
+        };
         let cpu_usage_observer = self.observers.get_mut(&cpu_usage_observer_ref).unwrap();
+        // let cc_time_observer_ref = CCTimesObserver::new("cc_times").handle();
+        // let cc_time_observer = self.observers.get_mut(&cc_time_observer_ref).unwrap();
+        // let ctrl_observer_ref = RecvControlFrameObserver::new("ctrl").handle();
+        // let ctrl_observer = self.observers.get_mut(&ctrl_observer_ref).unwrap();
+        // let data_observer_ref = RecvDataFrameObserver::new("data").handle();
+        // let data_observer = self.observers.get_mut(&data_observer_ref).unwrap();
+        // let ack_observer_ref = ACKRangeObserver::new("ack").handle();
+        // let ack_observer = self.observers.get_mut(&ack_observer_ref).unwrap();
         match & mut quic_st.conn  {
             //conn不存在：重新建立连接
             None => {
@@ -421,93 +671,16 @@ where
             },
             
             Some(conn) => {
-                
-        
-                // send packet
-                // let buf = input.target_bytes();
-                // let buf_slice = buf.as_slice();
-                // println!("sending packet: {:?}", buf_slice);
-                // //使用 conn 发送一个PATH_CHALLENGE帧
-                // let mut d = [42; 128];
-                // let frame = frame::Frame::PathChallenge {
-                //     data: [1, 2, 3, 4, 5, 6, 7, 8],
-                // };
-                // let wire_len = {
-                //     let mut b = octets::OctetsMut::with_slice(&mut d);
-                //     frame.to_bytes(&mut b).unwrap()
-                // };
-                //assert_eq!(wire_len, 9);
-                //let mut b = octets::Octets::with_slice(&d);
-        
-                /*
-                let stream_id = conn.stream_writable_next();
-                match stream_id {
-                    None => {
-                        eprintln!("No stream id available");
-                        //exit_kind = ExitKind::Crash;
-                    },
-                    Some(stream_id) => {
-                        println!("Stream id: {:?}", stream_id);
-                        // let input = input.target_bytes();
-                        conn.stream_send(stream_id, input.target_bytes().as_slice(), false);
-                        match quic_st.handle_sending(){
-                            Err(e) => {
-                                eprintln!("Failed to send data: {:?}", e);
-                                exit_kind = ExitKind::Crash;
-                            },
-                            Ok(_) => (),
-                        }
-                        match quic_st.handle_recving(){
-                            Err(e) => {
-                                eprintln!("Failed to recv data: {:?}", e);
-                                exit_kind = ExitKind::Crash;
-                            },
-                            Ok(_) => (),
-                        }
-                    //println!("Server name: {:?}", sn);
-                    }
-                }
-                */
             }
         }
-        //conn 必然存在，直接发送数据
-        //测试:手动生成5000个path challenge帧 + Ping帧和2000个Padding帧
-        // let mut input_struct = InputStruct::new();
-        // input_struct = input_struct.set_pkt_type(packet::Type::Short).set_recv_timeout(100).set_send_timeout(5);
-        // input_struct = input_struct.set_packet_resort_type(pkt_resort_type::None);
-        // let mut frame_cycle1 = FramesCycleStruct::new();
-        // frame_cycle1 = frame_cycle1.set_repeat_num(500);
-        // // let pc_frame = frame::Frame::PathChallenge {
-        // //     data: [1, 2, 3, 4, 5, 6, 7, 8],
-        // // };
-        // let nci_frame = frame::Frame::NewConnectionId {
-        //     seq_num: 2,
-        //     retire_prior_to:2,
-        //     conn_id: vec![1, 2, 3, 4, 5, 6, 7, 8],
-        //     reset_token: [100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115],
-        // };
-        // //let ping_frame = frame::Frame::Ping { mtu_probe: Some(0) };
-        // //frame_cycle1 = frame_cycle1.add_frame(pc_frame);
-        // frame_cycle1 = frame_cycle1.add_frame(nci_frame);
-
-        // // let mut frame_cycle2 = FramesCycleStruct::new();
-        // // frame_cycle2 = frame_cycle2.set_repeat_num(200);
-        // // let pad_frame = frame::Frame::Padding { len: (100) };
-        // // frame_cycle2 = frame_cycle2.add_frame(pad_frame);
-        // input_struct = input_struct.add_frames_cycle(frame_cycle1);
-        // // input_struct = input_struct.add_frames_cycle(frame_cycle2);
-        // input_struct = input_struct.calc_frames_cycle_len();
-
-
-        //通过input 生成frames
         let binding = input.target_bytes();
         let mut inputs = binding.as_slice();        
         let mut input_struct = InputStruct::new();
         input_struct = InputStruct_deserialize(inputs);
 
         let pkt_type = input_struct.pkt_type;
-        // let lost_time_dur = input_struct.send_timeout;
-        let lost_time_dur = 0;
+        let lost_time_dur = input_struct.send_timeout;
+        // let lost_time_dur = 0;
         let recv_time = input_struct.recv_timeout;
         let mut recv_left_time = recv_time;
                 
@@ -529,7 +702,7 @@ where
     
                         debug!("frame len: {:?}", frame.wire_len());
                         debug!("frame type: {:?}", frame);
-                        // 注释代码是按照标准的MTU讲帧尽可能的合并，在fuzz过程中这应该是负优化，于是每次只发送1个帧
+                        // 注释代码是按照标准的MTU将帧尽可能的合并，在fuzz过程中这应该是负优化，于是每次只发送1个帧
                         if cur_pkt_len + frame.wire_len() < max_pkt_len {
                             frame_list.push(frame.clone());
                             cur_pkt_len += frame.wire_len();
@@ -564,7 +737,14 @@ where
                                     eprintln!("Failed to recv data: {:?}", e);
                                     exit_kind = ExitKind::Crash;
                                 },
-                                Ok((recv_pkts,recv_bytes)) => {
+                                Ok(recv_frames) => {
+                                    let mut recv_pkts = 0;
+                                    let mut recv_bytes = 0;
+                                    for recv_frame in recv_frames.iter() {
+                                        total_recv_frames.push(recv_frame.clone());
+                                        recv_pkts += 1;
+                                        recv_bytes += recv_frame.frame.wire_len();
+                                    }
                                     total_recv_pkts += recv_pkts;
                                     total_recv_bytes += recv_bytes;
             
@@ -591,20 +771,31 @@ where
                         // frame_list.push(frame.clone());
             
                     }
-                    info!("sent {:?} frames",frames.len());
+                    debug!("sent {:?} frames",frames.len());
     
                 }
             }
     
         } 
 
-        for i in 0..10 {
-            match quic_st.handle_recving(){
+        while true {
+            match quic_st.handle_recving_once(){
                 Err(e) => {
                     eprintln!("Failed to recv data: {:?}", e);
-                    exit_kind = ExitKind::Crash;
+                    break;
+                    // exit_kind = ExitKind::Crash;
                 },
-                Ok((recv_pkts,recv_bytes)) => {
+                Ok(recv_frames) => {
+                    if recv_frames.len() == 0 {
+                        break;
+                    }
+                    let mut recv_pkts = 0;
+                    let mut recv_bytes = 0;
+                    for recv_frame in recv_frames.iter() {
+                        total_recv_frames.push(recv_frame.clone());
+                        recv_pkts += 1;
+                        recv_bytes += recv_frame.frame.wire_len();
+                    }
                     total_recv_pkts += recv_pkts;
                     total_recv_bytes += recv_bytes;
                     ()
@@ -628,10 +819,15 @@ where
         buf_recv_pkt_num_observer.set_send_bytes(total_sent_bytes as u64);
         buf_recv_pkt_num_observer.set_send_pkts(total_sent_pkts  as u64);
         self.update_recv_pkt_obs(buf_recv_pkt_num_observer);
-        self.update_cpu_usage_obs(cur_cpu_usages);
-        // for i in 0..frames.len() {
-        //     quic_st.handle_recving();
-        // }
+        if is_first {
+            self.update_first_cpu_usage_obs(cur_cpu_usages);
+        } else {
+            self.update_second_cpu_usage_obs(cur_cpu_usages);
+        }
+
+        /* handle every frame */
+        self.handle_frames(total_recv_frames);
+
         
         let res = self.judge_server_status();
         if self.non_res_times == 30{

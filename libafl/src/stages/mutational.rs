@@ -150,7 +150,9 @@ where
 
 /// Default value, how many iterations each stage gets, as an upper bound.
 /// It may randomly continue earlier.
-pub static DEFAULT_MUTATIONAL_MAX_ITERATIONS: usize = 128;
+/* PATCH */
+// 128 -> 4
+pub static DEFAULT_MUTATIONAL_MAX_ITERATIONS: usize = 4;
 
 /// The default mutational stage
 #[derive(Clone, Debug)]

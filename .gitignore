@@ -77,4 +77,5 @@ fuzzer
 fuzzer_libpng*
 fuzzers/my_fuzzers/my_UDP_fuzzer_test_with_libafl_cc/corpus-bak/
 fuzzers/my_fuzzers/gen_testcase/corpus/*
+fuzzers/my_fuzzers/my_UDP_fuzzer_test_with_libafl_cc/corpus/
 

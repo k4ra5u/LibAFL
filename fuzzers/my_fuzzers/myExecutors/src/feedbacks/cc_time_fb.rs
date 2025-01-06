@@ -46,7 +46,7 @@ where
     {
         let observer = _observers.get(&self.observer_handle).unwrap();
         if true {
-            info!("Interesting testcase: {:?}", _input);
+            // info!("Interesting CC testcase");
             return Ok(false);
         }
 
@@ -68,7 +68,7 @@ where
     {
         let observer = observers.get(&self.observer_handle).unwrap();
         if true {
-            info!("Appending Interesting testcase: {:?}", testcase);
+            info!("Appending CCTime Interesting testcase");
             // TODO: 根据产生回复的帧判断是否是有用的测试用例，以及如何对测试用例进行剪枝
         }
         Ok(())

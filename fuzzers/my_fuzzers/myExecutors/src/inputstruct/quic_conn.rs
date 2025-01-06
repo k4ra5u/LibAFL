@@ -1,4 +1,4 @@
-use quiche::{frame, packet, Connection, ConnectionId, Error, Header};
+use quiche::{crypto, frame, packet::{self, *}, Connection, ConnectionId, Error, Header,FrameWithPkn};
 use rand::Rng;
 use std::net::{SocketAddr, ToSocketAddrs};
 use ring::rand::*;
@@ -15,6 +15,112 @@ pub fn hex_dump(buf: &[u8]) -> String {
 
     vec.join("")
 }
+
+pub fn pkt_num_len(pn: u64, largest_acked: u64) -> usize {
+    let num_unacked: u64 = pn.saturating_sub(largest_acked) + 1;
+    // computes ceil of num_unacked.log2()
+    let min_bits = u64::BITS - num_unacked.leading_zeros();
+    // get the num len in bytes
+    ((min_bits + 7) / 8) as usize
+}
+
+pub fn decrypt_hdr(
+    b: &mut octets::OctetsMut, hdr: &mut Header, aead: &crypto::Open,
+) -> Result<(),Error> {
+    let mut first = {
+        let (first_buf, _) = b.split_at(1)?;
+        first_buf.as_ref()[0]
+    };
+
+    let mut pn_and_sample = b.peek_bytes_mut(20)?;
+
+    let (mut ciphertext, sample) = pn_and_sample.split_at(MAX_PKT_NUM_LEN)?;
+
+    let ciphertext = ciphertext.as_mut();
+
+    let mask = aead.new_mask(sample.as_ref())?;
+
+    if Header::is_long(first) {
+        first ^= mask[0] & 0x0f;
+    } else {
+        first ^= mask[0] & 0x1f;
+    }
+
+    let pn_len = usize::from((first & 3) + 1);
+
+    let ciphertext = &mut ciphertext[..pn_len];
+
+    for i in 0..pn_len {
+        ciphertext[i] ^= mask[i + 1];
+    }
+
+    // Extract packet number corresponding to the decoded length.
+    let pn = match pn_len {
+        1 => u64::from(b.get_u8()?),
+
+        2 => u64::from(b.get_u16()?),
+
+        3 => u64::from(b.get_u24()?),
+
+        4 => u64::from(b.get_u32()?),
+
+        _ => return Err(Error::InvalidPacket),
+    };
+
+    // Write decrypted first byte back into the input buffer.
+    let (mut first_buf, _) = b.split_at(1)?;
+    first_buf.as_mut()[0] = first;
+
+    hdr.pkt_num = pn;
+    hdr.pkt_num_len = pn_len;
+
+    if hdr.ty == Type::Short {
+        hdr.key_phase = (first & 4) != 0;
+    }
+
+    Ok(())
+}
+
+pub fn decode_pkt_num(largest_pn: u64, truncated_pn: u64, pn_len: usize) -> u64 {
+    let pn_nbits = pn_len * 8;
+    let expected_pn = largest_pn + 1;
+    let pn_win = 1 << pn_nbits;
+    let pn_hwin = pn_win / 2;
+    let pn_mask = pn_win - 1;
+    let candidate_pn = (expected_pn & !pn_mask) | truncated_pn;
+
+    if candidate_pn + pn_hwin <= expected_pn && candidate_pn < (1 << 62) - pn_win
+    {
+        return candidate_pn + pn_win;
+    }
+
+    if candidate_pn > expected_pn + pn_hwin && candidate_pn >= pn_win {
+        return candidate_pn - pn_win;
+    }
+
+    candidate_pn
+}
+
+pub fn decrypt_pkt<'a>(
+    b: &'a mut octets::OctetsMut, pn: u64, pn_len: usize, payload_len: usize,
+    aead: &crypto::Open,
+) -> Result<octets::Octets<'a>,Error> {
+    let payload_offset = b.off();
+
+    let (header, mut payload) = b.split_at(payload_offset)?;
+
+    let payload_len = payload_len
+        .checked_sub(pn_len)
+        .ok_or(Error::InvalidPacket)?;
+
+    let mut ciphertext = payload.peek_bytes_mut(payload_len)?;
+
+    let payload_len =
+        aead.open_with_u64_counter(pn, header.as_ref(), ciphertext.as_mut())?;
+
+    Ok(b.get_bytes(payload_len)?)
+}
+
 
 pub fn encode_pkt(
     conn: &mut Connection, pkt_type: packet::Type, frames: &[frame::Frame],
@@ -257,6 +363,8 @@ impl QuicStruct {
         //let scid = quiche::ConnectionId::from_ref(&scid);
         //SystemRandom::new().fill(&mut scid[..]).unwrap();
         let mut scids : Vec<[u8; quiche::MAX_CONN_ID_LEN]> = Vec::new();
+        SystemRandom::new().fill(&mut scid[..]).unwrap();
+        // self.scids[0] = scid;
         scids.push(scid);
     
         // Get local address.
@@ -291,7 +399,6 @@ impl QuicStruct {
     
         // Create a QUIC connection and initiate handshake.
         let mut scid = self.scids[0];
-        SystemRandom::new().fill(&mut scid[..]).unwrap();
     
         let scid = quiche::ConnectionId::from_ref(&scid);
         let SN_name = Some(self.server_name.as_str());
@@ -858,10 +965,11 @@ impl QuicStruct {
     }
 
 
-    pub fn handle_recving_once(&mut self) -> Result<(usize,usize), Error> {
+    pub fn handle_recving_once(&mut self) -> Result<Vec<FrameWithPkn>, Error> {
         let mut out = [0; MAX_DATAGRAM_SIZE];
-        let mut buf = [0; 65535];
+        let mut buf = [0; 1350];
         let mut recv_pkts = 0;
+        let mut recv_frames: Vec<FrameWithPkn> = Vec::new();
 
         // sockets.push(&self.migrate_socket);
         let mut conn = self.conn.as_mut().unwrap();
@@ -888,7 +996,7 @@ impl QuicStruct {
                     // Process subsequent events.
                     if e.kind() == std::io::ErrorKind::WouldBlock {
                         debug!("{}: recv() would block", local_addr);
-                        return Ok((0,0));
+                        return Ok(recv_frames);
                     }
 
                     debug!("{local_addr}: recv() failed: {e:?}");
@@ -902,8 +1010,51 @@ impl QuicStruct {
                 to: local_addr,
                 from,
             };
+            // let mut dcid = [0; quiche::MAX_CONN_ID_LEN];
+            // println!("scids: {:?}", self.scids);
+            // if self.scids.len() > 0 {
+            //     for cid in self.scids.iter() {
+            //         if cid == &buf[1..cid.len()+1] {
+            //             dcid = *cid;
+            //             break;
+            //         }
+            //     }
+            // }
+            // let mut b = octets::OctetsMut::with_slice(&mut buf);
+            // let mut hdr = Header::from_bytes(&mut b, dcid.len()).unwrap();
+    
+            // let epoch = hdr.ty.to_epoch()?;
+            // let aead = conn.pkt_num_spaces[epoch].crypto_open.as_ref().unwrap();
+            // let aead_tag_len = aead.alg().tag_len();
+
+            // let payload_len = b.cap();
+    
+            // packet::decrypt_hdr(&mut b, &mut hdr, aead).unwrap();
+    
+
+            // let pn = packet::decode_pkt_num(
+            //     conn.pkt_num_spaces[epoch].largest_rx_pkt_num,
+            //     hdr.pkt_num,
+            //     hdr.pkt_num_len,
+            // );
+            // let pn_len = hdr.pkt_num_len;
+            // let mut payload = packet::decrypt_pkt(
+            //     &mut b,
+            //     pn,
+            //     pn_len,
+            //     payload_len,
+            //     aead,
+            // )?;
+    
+            // let mut frames = Vec::new();
+    
+            // while payload.cap() > 0 {
+            //     let frame = frame::Frame::from_bytes(&mut payload, hdr.ty)?;
+            //     frames.push(frame);
+            // }
+    
             
-            let read = match conn.recv(&mut buf[..len], recv_info) {
+            let (read,read_frames) = match conn.recv2(&mut buf[..len], recv_info) {
                 Ok(v) => {
                     debug!("recved bytes: {:?}", &buf[..len]);
                     let packet_info = buf[0];
@@ -934,11 +1085,14 @@ impl QuicStruct {
                 },
             };
             recv_bytes += read;
+            for frame in read_frames {
+                recv_frames.push(frame.clone());
+            }
             debug!("{}: processed {} bytes", local_addr, read);
         }
 
         debug!("done reading");
-        Ok((recv_pkts,recv_bytes))
+        Ok(recv_frames)
     }
 
     pub fn send_buf(&mut self,buf: &mut [u8], len: usize,) -> Result<usize,Error> {

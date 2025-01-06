@@ -45,36 +45,15 @@ where
         OT: ObserversTuple<S>,
     {
         let observer = _observers.get(&self.observer_handle).unwrap();
-        let final_cpu_usage = observer.get_cur_cpu_usage_imut();
-        let mut total_cpu = 0.0;
-        for record_cpu in observer.record_cpu_usages.iter() {
-            total_cpu += record_cpu;
-        }
-        let avg_cpu = total_cpu / observer.record_times as f64;
+        let final_cpu_usage = observer.final_cpu_usage;
+        let avg_cpu = observer.final_based_cpu_usage;
         warn!("CPUUsageFeedback: avg_cpu: {:.2}%", avg_cpu);
-        if (final_cpu_usage > observer.based_cpu_usage +50.0) || (avg_cpu > observer.based_cpu_usage + 50.0) {
-            info!("CPUUsageFeedback: Interesting testcase: {:?}", _input);
+        if (final_cpu_usage > observer.based_cpu_usage +30.0) || (avg_cpu > observer.based_cpu_usage + 30.0) {
+            info!("CPUUsageFeedback: Interesting testcase");
             return Ok(true);
         }
 
         Ok(false)
-    }
-
-    /// Append to the testcase the generated metadata in case of a new corpus item
-    #[inline]
-    fn append_metadata<EM, OT>(
-        &mut self,
-        _state: &mut S,
-        _manager: &mut EM,
-        observers: &OT,
-        testcase: &mut Testcase<S::Input>,
-    ) -> Result<(), Error>
-    where
-        OT: ObserversTuple<S>,
-        EM: EventFirer<State = S>,
-    {
-        let observer = observers.get(&self.observer_handle).unwrap();
-        Ok(())
     }
 
     /// Discard the stored metadata in case that the testcase is not added to the corpus

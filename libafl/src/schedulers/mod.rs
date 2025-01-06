@@ -1,6 +1,7 @@
 //! Schedule the access to the Corpus.
 
 use alloc::{borrow::ToOwned, string::ToString};
+use log::info;
 use core::marker::PhantomData;
 
 pub mod testcase_score;
@@ -238,6 +239,7 @@ where
         } else {
             let id = random_corpus_id!(state.corpus(), state.rand_mut());
             self.set_current_scheduled(state, Some(id))?;
+            info!("Next testcase: {:?}", id);
             Ok(id)
         }
     }

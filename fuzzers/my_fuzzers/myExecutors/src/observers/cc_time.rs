@@ -2,20 +2,34 @@ use std::borrow::Cow;
 
 use libafl::inputs::HasMutatorBytes;
 use libafl_bolts::ownedref::OwnedMutPtr;
-use libafl_bolts::{Error, Named,tuples::MatchName};
+use libafl_bolts::tuples::{Handle, Handled};
+use libafl_bolts::{Error, Named,tuples::MatchName,tuples::MatchNameRef};
 use log::info;
 use serde::{Deserialize, Serialize};
-use libafl::{executors::ExitKind, inputs::UsesInput,observers::Observer, state::UsesState};
+use libafl::{executors::ExitKind, inputs::UsesInput, state::UsesState};
 use quiche::{frame, packet, Connection, ConnectionId, Header};
+use libafl::{
+    observers::{DifferentialObserver, Observer, ObserversTuple},
+};
 use crate::inputstruct::*;
+
+#[derive(Debug, Serialize,Clone, Deserialize,PartialEq)]
+pub enum CCTimesObserverState {
+    OK,
+    FirstCC,
+    SecondCC,
+    MistypeErrorCode,
+    MistypeCCReason,
+}
+
+
 #[derive( Serialize, Deserialize,Debug, Clone)]
 pub struct CCTimesObserver {
     name: Cow<'static, str>,
-    cc_pkn: u64,
-    cc_res_pkn: u64,
-    cc_reason_num: u64,
-    cc_res_frame_type: usize,
-    cc_reason: String,
+    pub pkn: u64,
+    pub error_code: u64,
+    pub frame_type: u64,
+    pub reason: Vec<u8>,
 
 }
 
@@ -25,27 +39,11 @@ impl CCTimesObserver {
     pub fn new(name: &'static str) -> Self {
         Self {
             name: Cow::from(name),
-            cc_pkn: 0,
-            cc_res_pkn: 0,
-            cc_res_frame_type : 0,
-            cc_reason_num: 0,
-            cc_reason: String::from(""),
+            pkn: 0,
+            error_code: 0,
+            frame_type : 0,
+            reason: Vec::new(),
         }
-    }
-    pub fn set_cc_pkn(&mut self, cc_pkn: u64) {
-        self.cc_pkn = cc_pkn;
-    }
-    pub fn set_cc_res_pkn(&mut self, cc_res_pkn: u64) {
-        self.cc_res_pkn = cc_res_pkn;
-    }
-    pub fn set_cc_reason_num(&mut self, cc_reason_num: u64) {
-        self.cc_reason_num = cc_reason_num;
-    }
-    pub fn set_cc_reason(&mut self, cc_reason: String) {
-        self.cc_reason = cc_reason.clone();
-    }
-    pub fn set_cc_res_frame_type(&mut self, cc_res_frame_type: usize) {
-        self.cc_res_frame_type = cc_res_frame_type;
     }
 
 }
@@ -56,11 +54,10 @@ where
 {
 
     fn pre_exec(&mut self, _state: &mut S, _input: &S::Input) -> Result<(), Error> {
-        self.cc_pkn = 0;
-        self.cc_reason_num = 0;
-        self.cc_res_pkn = 0;
-        self.cc_res_frame_type = 0;
-        self.cc_reason = String::from("");
+        self.pkn = 0;
+        self.error_code = 0;
+        self.frame_type = 0;
+        self.reason = Vec::new();
         Ok(())
     }
 
@@ -78,5 +75,115 @@ where
 impl Named for CCTimesObserver {
     fn name(&self) -> &Cow<'static, str> {
         &self.name
+    }
+}
+
+#[allow(clippy::unsafe_derive_deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DifferentialCCTimesObserver {
+
+    first_name: Cow<'static, str>,
+    second_name: Cow<'static, str>,
+    first_ob_ref: Handle<CCTimesObserver>,
+    first_observer: CCTimesObserver,
+    second_observer: CCTimesObserver,
+    second_ob_ref: Handle<CCTimesObserver>,
+    name: Cow<'static, str>,
+    judge_type: CCTimesObserverState,
+}
+
+impl DifferentialCCTimesObserver {
+    /// Create a new `DifferentialCCTimesObserver`.
+    pub fn new (
+        first: &mut CCTimesObserver,
+        second: &mut CCTimesObserver,
+    ) -> Self {
+        Self {
+            first_name: first.name().clone(),
+            second_name: second.name().clone(),
+            name: Cow::from(format!("differential_{}_{}", first.name(), second.name())),
+            first_ob_ref: first.handle(),
+            first_observer: CCTimesObserver::new("fake"),
+            second_observer: CCTimesObserver::new("fake"),
+            second_ob_ref: second.handle(),
+            judge_type: CCTimesObserverState::OK,
+        }
+    }
+
+    pub fn first_name(&self) -> &str {
+        &self.first_name
+    }
+
+    pub fn second_name(&self) -> &str {
+        &self.second_name
+    }
+
+    pub fn judge_type(&self) -> &CCTimesObserverState {
+        &self.judge_type
+    }
+    pub fn perform_judge (&mut self) {
+        if self.first_observer.pkn ==0 && self.second_observer.pkn == 0 {
+            self.judge_type = CCTimesObserverState::OK;
+        } else if self.first_observer.pkn == 0 && self.second_observer.pkn != 0 {
+            self.judge_type = CCTimesObserverState::SecondCC;
+        } else if self.first_observer.pkn != 0 && self.second_observer.pkn == 0 {
+            self.judge_type = CCTimesObserverState::FirstCC;
+        } else if self.first_observer.pkn != 0 && self.second_observer.pkn != 0 {
+            if self.first_observer.error_code != self.second_observer.error_code {
+                self.judge_type = CCTimesObserverState::MistypeErrorCode;
+            } else if self.first_observer.reason.len() !=0 && self.second_observer.reason.len() != 0 {
+                if self.first_observer.reason == self.second_observer.reason {
+                    self.judge_type = CCTimesObserverState::OK;
+                } else {
+                    self.judge_type = CCTimesObserverState::MistypeCCReason;
+                }
+            } else {
+                self.judge_type = CCTimesObserverState::OK;
+            } 
+        }
+        self.first_observer = CCTimesObserver::new("fake");
+        self.second_observer = CCTimesObserver::new("fake");
+    }
+}
+
+impl Named for DifferentialCCTimesObserver {
+    fn name(&self) -> &Cow<'static, str> {
+        &self.name
+    }
+}
+
+impl<S> Observer<S> for DifferentialCCTimesObserver where S: UsesInput {}
+
+impl< OTA, OTB, S> DifferentialObserver<OTA, OTB, S>
+    for DifferentialCCTimesObserver
+where
+    OTA: ObserversTuple<S>,
+    OTB: ObserversTuple<S>,
+    S: UsesInput,
+{
+    fn pre_observe_first(&mut self, _: &mut OTA) -> Result<(), Error> {
+        self.judge_type = CCTimesObserverState::OK;
+        Ok(())
+    }
+
+    fn pre_observe_second(&mut self, _: &mut OTB) -> Result<(), Error> {
+        self.judge_type = CCTimesObserverState::OK;
+        Ok(())
+    }
+    fn post_observe_first(&mut self, observers: &mut OTA) -> Result<(), Error> {
+        let first_observer = observers.get(&self.first_ob_ref).unwrap();
+        self.first_observer = first_observer.clone();
+        if self.second_observer.name() != "fake" {
+            self.perform_judge();
+        }
+        Ok(())
+    }
+    fn post_observe_second(&mut self, observers: &mut OTB) -> Result<(), Error> {
+        let second_observer = observers.get(&self.second_ob_ref).unwrap();
+        self.second_observer = second_observer.clone();
+        if self.first_observer.name() != "fake" {
+            self.perform_judge();
+        }
+        Ok(())
     }
 }

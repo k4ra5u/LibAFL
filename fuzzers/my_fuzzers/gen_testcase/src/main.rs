@@ -10,7 +10,7 @@ fn gen_ping_frame() {
     input_struct = input_struct.set_pkt_type(packet::Type::Short).set_recv_timeout(20).set_send_timeout(1);
     input_struct = input_struct.set_packet_resort_type(pkt_resort_type::None);
     let mut frame_cycle1 = FramesCycleStruct::new();
-    frame_cycle1 = frame_cycle1.set_repeat_num(100000000000);
+    frame_cycle1 = frame_cycle1.set_repeat_num(100);
     let ping_frame = frame::Frame::Ping {
         mtu_probe: None,
     };
@@ -34,8 +34,8 @@ fn gen_crypto_flood_frame(){
     input_struct = input_struct.set_packet_resort_type(pkt_resort_type::None);
     let mut frame_cycle1 = FramesCycleStruct::new();
     frame_cycle1 = frame_cycle1.set_repeat_num(1);
-    for i in 0..1000000{
-        let data: Vec<u8> = std::iter::repeat(41).take(100).collect();
+    for i in 0..100{
+        let data: Vec<u8> = std::iter::repeat(41).take(1000).collect();
         let range_buf_data = RangeBuf::from(&data,i*1024,false);
         let crypto_frame = frame::Frame::Crypto {
             data: range_buf_data,
@@ -59,7 +59,7 @@ fn gen_cid_flood_frame(){
     input_struct = input_struct.set_pkt_type(packet::Type::Short).set_recv_timeout(20).set_send_timeout(1);
     input_struct = input_struct.set_packet_resort_type(pkt_resort_type::None);
     let mut frame_cycle1 = FramesCycleStruct::new();
-    frame_cycle1 = frame_cycle1.set_repeat_num(100000000000);
+    frame_cycle1 = frame_cycle1.set_repeat_num(10000);
     let nci_frame = frame::Frame::NewConnectionId {
         seq_num: 2,
         retire_prior_to:2,
@@ -85,7 +85,7 @@ fn gen_pc_flood_frame(){
     input_struct = input_struct.set_pkt_type(packet::Type::Short).set_recv_timeout(20).set_send_timeout(1);
     input_struct = input_struct.set_packet_resort_type(pkt_resort_type::None);
     let mut frame_cycle1 = FramesCycleStruct::new();
-    frame_cycle1 = frame_cycle1.set_repeat_num(100000000000);
+    frame_cycle1 = frame_cycle1.set_repeat_num(10000);
     let pc_frame = frame::Frame::PathChallenge {
         data: [1, 2, 3, 4, 5, 6, 7, 8],
     };
@@ -155,17 +155,17 @@ fn gen_nci_huge_frame(){
 }
 
 fn main() {
-    // println!("gen ping frame");
-    // gen_ping_frame();
-    // println!("gen crypto flood frame");
-    // gen_crypto_flood_frame();
-    // println!("gen cid flood frame");
-    // gen_cid_flood_frame();
-    // println!("gen pc flood frame");
-    // gen_pc_flood_frame();
+    println!("gen ping frame");
+    gen_ping_frame();
+    println!("gen crypto flood frame");
+    gen_crypto_flood_frame();
+    println!("gen cid flood frame");
+    gen_cid_flood_frame();
+    println!("gen pc flood frame");
+    gen_pc_flood_frame();
     // println!("gen cc frame");
     // gen_cc_frame();
-    println!("gen nci huge frame");
-    gen_nci_huge_frame();
+    // println!("gen nci huge frame");
+    // gen_nci_huge_frame();
     println!("finished")
 }
