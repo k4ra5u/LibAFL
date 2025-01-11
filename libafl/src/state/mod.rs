@@ -31,14 +31,7 @@ use crate::monitors::ClientPerfMonitor;
 #[cfg(feature = "scalability_introspection")]
 use crate::monitors::ScalabilityMonitor;
 use crate::{
-    corpus::{Corpus, CorpusId, HasCurrentCorpusId, HasTestcase, Testcase},
-    events::{Event, EventFirer, LogSeverity},
-    feedbacks::Feedback,
-    fuzzer::{Evaluator, ExecuteInputResult},
-    generators::Generator,
-    inputs::{Input, UsesInput},
-    stages::{HasCurrentStage, HasNestedStageStatus, StageId},
-    Error, HasMetadata, HasNamedMetadata,
+    corpus::{Corpus, CorpusId, HasCurrentCorpusId, HasTestcase, Testcase}, events::{Event, EventFirer, LogSeverity}, feedbacks::Feedback, fuzzer::{Evaluator, ExecuteInputResult}, generators::Generator, inputs::{Input, UsesInput}, stages::{HasCurrentStage, HasNestedStageStatus, StageId}, Error, HasMetadata, HasNamedMetadata
 };
 
 /// The maximum size of a testcase
@@ -208,6 +201,12 @@ pub struct LoadConfig<'a, I, S, Z> {
     exit_on_solution: bool,
 }
 
+/* PATCH */
+pub trait HasRandSeed {
+    fn rand_seed(&self) -> u32;
+    fn set_rand_seed(&mut self, seed: u32);
+}
+
 #[cfg(feature = "std")]
 impl<'a, I, S, Z> Debug for LoadConfig<'a, I, S, Z> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -263,6 +262,16 @@ pub struct StdState<I, C, R, SC> {
     corpus_id: Option<CorpusId>,
     stage_stack: StageStack,
     phantom: PhantomData<I>,
+    /* PATCH */
+    pub rand_seed: u32,
+}
+impl<I, C, R, SC> HasRandSeed for StdState<I, C, R, SC> {
+    fn rand_seed(&self) -> u32 {
+        self.rand_seed
+    }
+    fn set_rand_seed(&mut self, seed: u32) {
+        self.rand_seed = seed;
+    }
 }
 
 impl<I, C, R, SC> UsesInput for StdState<I, C, R, SC>
@@ -687,7 +696,17 @@ where
         EM: EventFirer<State = Self>,
         Z: Evaluator<E, EM, State = Self>,
     {
-        log::info!("Loading file {:?} ...", &path);
+        // log::info!("Loading file {:?} ...", &path);
+        /* PATCH */
+        let file_name = path.file_name().unwrap().to_string_lossy();
+        // seek files with seed_<srand_seed>
+        if file_name.starts_with("seed_") {
+            let seed = file_name.split('_').last().unwrap();
+            let seed = seed.parse::<u32>().unwrap();
+            self.rand_seed = seed;
+            // log::info!("Seed parsed as {:?}", seed);
+        }
+
         let input = (config.loader)(fuzzer, self, path)?;
         if config.forced {
             let _: CorpusId = fuzzer.add_input(self, executor, manager, input)?;
@@ -1101,6 +1120,7 @@ where
             phantom: PhantomData,
             #[cfg(feature = "std")]
             multicore_inputs_processed: None,
+            rand_seed: 0,
         };
         feedback.init_state(&mut state)?;
         objective.init_state(&mut state)?;

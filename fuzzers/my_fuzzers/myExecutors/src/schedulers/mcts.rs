@@ -243,7 +243,7 @@ where
         // new_node.borrow_mut().reward = rand_0_1;
         MCTSNode::add_child(&cur_node, new_node,self.evaluate_res);
         info!("Add new node: {:?},reward:{:?}", id,self.evaluate_res);
-        self.draw_mcts_tree();
+        // self.draw_mcts_tree();
         Ok(())
     }
 

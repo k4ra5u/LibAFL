@@ -79,7 +79,8 @@ pub fn main() {
     std::env::set_var("RUST_LOG", "info");
     std::env::set_var("START_DIR", "/home/john/Desktop/cjj_related/testing_new/fuzzing-test/LibAFL/fuzzers/my_fuzzers/my_UDP_fuzzer_test_with_libafl_cc_Diff/start");
     std::env::set_var("JUDGE_DIR", "/home/john/Desktop/cjj_related/testing_new/fuzzing-test/LibAFL/fuzzers/my_fuzzers/my_UDP_fuzzer_test_with_libafl_cc_Diff/judge");
-    std::env::set_var("SSLKEYLOGFILE", "/home/john/Desktop/cjj_related/quic-go/example/key.log");
+    std::env::set_var("SSLKEYLOGFILE", "key.log");
+    std::env::set_var("PCAPS_DIR", "pcaps");
     env_logger::init();
     const MAP_SIZE: usize = 65536;
     let corpus_dirs: Vec<PathBuf> = vec![PathBuf::from("/home/john/Desktop/cjj_related/testing_new/fuzzing-test/LibAFL/fuzzers/my_fuzzers/my_UDP_fuzzer_test_with_libafl_cc_Diff/corpus/")];
@@ -99,6 +100,7 @@ pub fn main() {
     let mut first_ack_observer = ACKRangeObserver::new("ack");
     let mut first_mem_observer = MemObserver::new("mem");
     let mut first_ucb_observer = UCBObserver::new("ucb1");
+    let mut first_misc_ob = MiscObserver::new("misc");
 
 
 
@@ -112,6 +114,7 @@ pub fn main() {
     let mut second_ack_observer = ACKRangeObserver::new("ack");
     let mut second_mem_observer = MemObserver::new("mem");
     let mut second_ucb_observer = UCBObserver::new("ucb2");
+    let mut second_misc_ob = MiscObserver::new("misc");
 
     
 
@@ -122,6 +125,9 @@ pub fn main() {
     let diff_data_ob = DifferentialRecvDataFrameObserver::new(&mut first_data_observer, &mut second_data_observer);
     let diff_ack_ob = DifferentialACKRangeObserver::new(&mut first_ack_observer, &mut second_ack_observer);
     let diff_mem_ob = DifferentialMemObserver::new(&mut first_mem_observer, &mut second_mem_observer);
+    let diff_misc_fb = DifferentialMiscObserver::new(&mut first_misc_ob, &mut second_misc_ob);
+
+    
 
 
     let scheduler =  MCTSScheduler::new(&first_ucb_observer);
@@ -131,15 +137,13 @@ pub fn main() {
 
 
     let mut feedback = feedback_or!(
-        CrashFeedback::new(),
-
         // TimeFeedback::new(&time_observer),
         // RecvPktNumFeedback::new(&recv_pkt_num_observer),
         UCBFeedback::new(&first_ucb_observer),
     );    
     let mut objective = feedback_or!(
         CrashFeedback::new(),
-        DifferFeedback::new(&diff_cc_ob, &diff_cpu_ob, &diff_mem_ob, &diff_ctrl_ob, &diff_data_ob, &diff_ack_ob),
+        DifferFeedback::new(&diff_cc_ob, &diff_cpu_ob, &diff_mem_ob, &diff_ctrl_ob, &diff_data_ob, &diff_ack_ob,&diff_misc_fb),
         first_normal_conn_fb,
         second_normal_conn_fb,
     ); 
@@ -154,7 +158,7 @@ pub fn main() {
     .unwrap();
 
     let monitor = SimpleMonitor::with_user_monitor(|s| {
-        println!("{s}");
+        println!("{s}\n");
     });
     let mut mgr = SimpleEventManager::new(monitor);
 
@@ -171,6 +175,7 @@ pub fn main() {
         first_data_observer,
         first_ack_observer,
         first_mem_observer,
+        first_misc_ob,
         );
 
     let second_observers = tuple_list!(
@@ -184,6 +189,7 @@ pub fn main() {
         second_data_observer,
         second_ack_observer,
         second_mem_observer,
+        second_misc_ob,
         );
     let diff_observers = tuple_list!(
         diff_cc_ob,
@@ -192,6 +198,7 @@ pub fn main() {
         diff_data_ob,
         diff_ack_ob,
         diff_mem_ob,
+        diff_misc_fb,
     );
 
     let mut rng = rand::thread_rng();

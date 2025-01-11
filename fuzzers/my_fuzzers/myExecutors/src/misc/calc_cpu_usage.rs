@@ -86,7 +86,7 @@ pub fn calculate_cpu_usage(
 
 fn main() {
     let pid: u32 = 588337; // 将此处替换为你要监控的进程A的PID
-    let cpu_ids = vec![20, 21,22,23]; // 假设进程绑定了 CPU0 和 CPU1
+    let cpu_ids = vec![50, 51,52,53]; // 假设进程绑定了 CPU0 和 CPU1
     let interval = Duration::from_secs(1);
 
     loop {

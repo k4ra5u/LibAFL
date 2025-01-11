@@ -1,7 +1,8 @@
 use std::borrow::Cow;
 use std::fs::File;
 use std::io::{self, BufRead};
-use std::path::Path;
+use std::iter::FusedIterator;
+use std::path::{absolute, Path};
 use libafl::inputs::HasMutatorBytes;
 use libafl_bolts::ownedref::OwnedMutPtr;
 use libafl_bolts::tuples::{Handle, Handled};
@@ -82,6 +83,12 @@ impl MemObserver {
     
         Some((start, end))
     }
+    pub fn judge_proc_exist(&self) -> bool {
+        let pid = self.pid;
+        let ps_pid = format!("/proc/{}", pid);
+        let path = absolute(&ps_pid).unwrap();
+        path.exists()
+    }
 
 
 }
@@ -114,6 +121,10 @@ where
         _input: &S::Input,
         _exit_kind: &ExitKind,
     ) -> Result<(), Error> {
+        if !self.judge_proc_exist() {
+            self.after_mem = self.before_mem;
+            return Ok(());
+        }
         self.after_mem = 0;
         let map_file = format!("/proc/{}/maps", self.pid);
         let file = File::open(map_file)?;
@@ -127,7 +138,7 @@ where
         if self.allowed_mem == 0 {
             self.allowed_mem = self.after_mem;
         }
-        info!("post_exec of MemObserver: {:?}", self);
+        // info!("post_exec of MemObserver: {:?}", self);
         Ok(())
     }
 }
@@ -182,27 +193,55 @@ impl DifferentialMemObserver {
         &self.judge_type
     }
     pub fn perform_judge (&mut self) {
-        let first_mem_diff = self.first_observer.after_mem - self.first_observer.before_mem;
-        let second_mem_diff = self.second_observer.after_mem - self.second_observer.before_mem;
-        let first_running_diff = self.first_observer.before_mem - self.first_observer.initial_mem;
-        let second_running_diff = self.second_observer.before_mem - self.second_observer.initial_mem;
-        if first_mem_diff > second_mem_diff {
-            if first_mem_diff - second_mem_diff > 50000 || (first_mem_diff as f64 / first_running_diff as f64 )> 1.0 {
+        let mut first_mem_rev = false;
+        let mut second_mem_rev = false;
+        if self.first_observer.after_mem > self.first_observer.before_mem {
+            let first_mem_diff = self.first_observer.after_mem - self.first_observer.before_mem;
+            let first_running_diff = self.first_observer.before_mem - self.first_observer.initial_mem;
+            if first_mem_diff as f64 / first_running_diff as f64 > 1.0 {
                 if first_mem_diff > self.first_observer.allowed_mem*3 {
                     self.judge_type = MemObserverState::FirMemLeak;
                 }
             }
+        } else {
+            first_mem_rev = true;
         }
-        if second_mem_diff > first_mem_diff {
-            if second_mem_diff - first_mem_diff > 50000 || (second_mem_diff as f64 / second_running_diff as f64 )> 1.0 {
-                if second_mem_diff  > self.second_observer.allowed_mem*3 {
+        if self.second_observer.after_mem > self.second_observer.before_mem {
+            let second_mem_diff = self.second_observer.after_mem - self.second_observer.before_mem;
+            let second_running_diff = self.second_observer.before_mem - self.second_observer.initial_mem;
+            if second_mem_diff as f64 / second_running_diff as f64 > 1.0 {
+                if second_mem_diff > self.second_observer.allowed_mem*3 {
                     self.judge_type = MemObserverState::SecMemLeak;
                 }
             }
+        } else {
+            second_mem_rev = true;
+        }   
+        if !first_mem_rev && !second_mem_rev {
+            let first_mem_diff = self.first_observer.after_mem - self.first_observer.before_mem;
+            let second_mem_diff = self.second_observer.after_mem - self.second_observer.before_mem;
+            let first_running_diff = self.first_observer.before_mem - self.first_observer.initial_mem;
+            let second_running_diff = self.second_observer.before_mem - self.second_observer.initial_mem;
+            if first_mem_diff > second_mem_diff {
+                if first_mem_diff - second_mem_diff > 50000 || (first_mem_diff as f64 / first_running_diff as f64 )> 1.0 {
+                    if first_mem_diff > self.first_observer.allowed_mem*3 {
+                        self.judge_type = MemObserverState::FirMemLeak;
+                    }
+                }
+            }
+            if second_mem_diff > first_mem_diff {
+                if second_mem_diff - first_mem_diff > 50000 || (second_mem_diff as f64 / second_running_diff as f64 )> 1.0 {
+                    if second_mem_diff  > self.second_observer.allowed_mem*3 {
+                        self.judge_type = MemObserverState::SecMemLeak;
+                    }
+                }
+            }
+            if first_running_diff >0  && second_mem_diff >0 && (first_mem_diff as f64 / first_running_diff as f64 > 1.0) && (second_mem_diff as f64 / second_running_diff as f64 > 1.0) {
+                self.judge_type = MemObserverState::BothMemLeak;
+            }
         }
-        if first_running_diff >0  && second_mem_diff >0 && (first_mem_diff as f64 / first_running_diff as f64 > 1.0) && (second_mem_diff as f64 / second_running_diff as f64 > 1.0) {
-            self.judge_type = MemObserverState::BothMemLeak;
-        }
+        info!("FirMemOb:{:?}", self.first_observer);
+        info!("SecMemOb:{:?}", self.second_observer);
         self.first_observer = MemObserver::new("fake");
         self.second_observer = MemObserver::new("fake");
     }

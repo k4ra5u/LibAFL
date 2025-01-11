@@ -424,7 +424,8 @@ impl QuicStruct {
         //         conn.set_session(&session).ok();
         //     }
         // }
-    
+
+        info!("{:} -> {:}",self.socket.local_addr().unwrap().port(),self.peer_addr.port());
         debug!(
             "connecting to {:} from {:} with scid {:?}",
             self.peer_addr,

@@ -30,6 +30,7 @@ pub struct CCTimesObserver {
     pub error_code: u64,
     pub frame_type: u64,
     pub reason: Vec<u8>,
+    pub srand_seed: u32,
 
 }
 
@@ -43,6 +44,7 @@ impl CCTimesObserver {
             error_code: 0,
             frame_type : 0,
             reason: Vec::new(),
+            srand_seed: 0,
         }
     }
 
@@ -67,7 +69,7 @@ where
         _input: &S::Input,
         _exit_kind: &ExitKind,
     ) -> Result<(), Error> {
-        info!("post_exec of CCTimesObserver: {:?}", self);
+        // info!("post_exec of CCTimesObserver: {:?}", self);
         Ok(())
     }
 }
@@ -141,6 +143,8 @@ impl DifferentialCCTimesObserver {
                 self.judge_type = CCTimesObserverState::OK;
             } 
         }
+        info!("FirCCOb:{:?}", self.first_observer);
+        info!("SecCCOb:{:?}", self.second_observer);
         self.first_observer = CCTimesObserver::new("fake");
         self.second_observer = CCTimesObserver::new("fake");
     }

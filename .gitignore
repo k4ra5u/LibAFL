@@ -3,6 +3,8 @@ target-bin
 out
 Cargo.lock
 vendor
+out.txt
+out.log
 
 .DS_Store
 .env
@@ -75,7 +77,14 @@ harness
 program
 fuzzer
 fuzzer_libpng*
-fuzzers/my_fuzzers/my_UDP_fuzzer_test_with_libafl_cc/corpus-bak/
 fuzzers/my_fuzzers/gen_testcase/corpus/*
-fuzzers/my_fuzzers/my_UDP_fuzzer_test_with_libafl_cc/corpus/
+fuzzers/my_fuzzers/check_corpus/corpus/*
+fuzzers/my_fuzzers/check_corpus/crashes/*
+fuzzers/my_fuzzers/check_corpus/pcaps/*
+
+fuzzers/my_fuzzers/my_UDP_fuzzer_test_with_libafl_cc_Diff/corpus/*
+fuzzers/my_fuzzers/my_UDP_fuzzer_test_with_libafl_cc_Diff/crashes/*
+fuzzers/my_fuzzers/my_UDP_fuzzer_test_with_libafl_cc_Diff/pcaps/*
+
+
 

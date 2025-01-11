@@ -1,4 +1,7 @@
+use core::error;
 use std::borrow::Cow;
+use std::mem;
+use std::process::Command;
 
 use libafl::corpus::Testcase;
 use libafl::events::EventFirer;
@@ -21,6 +24,30 @@ use crate::inputstruct::*;
 use crate::observers::*;
 
 pub fn cmp_ctrl_frames(a:Vec<Frame_info>,b:Vec<Frame_info>) -> bool {
+    for new_frame in b.iter() {
+        let mut new_flag = false;
+        for old_frame in a.iter() {
+            if mem::discriminant(&new_frame.frame) == mem::discriminant(&old_frame.frame) && new_frame.frame_num >10 && old_frame.frame_num > 10 {
+                new_flag = true;
+                break;
+            }
+        }
+        if !new_flag {
+            return false;
+        }
+    }
+    for old_frame in a.iter() {
+        let mut old_flag = false;
+        for new_frame in b.iter() {
+            if mem::discriminant(&new_frame.frame) == mem::discriminant(&old_frame.frame) && new_frame.frame_num >10 && old_frame.frame_num > 10 {
+                old_flag = true;
+                break;
+            }
+        }
+        if !old_flag {
+            return false;
+        }
+    }
 
     return true;
 }
@@ -33,7 +60,10 @@ pub struct Deduplication {
     pub ctrl_state: CtrlObserverState,
     pub data_state: DataObserverState,
     pub ack_state: ACKObserverState,
+    pub exit_kind: ExitKind,
     pub ctrl_seq: Vec<Frame_info>,
+    pub match_nums:usize
+
 }
 
 impl Deduplication {
@@ -47,7 +77,9 @@ impl Deduplication {
             ctrl_state: CtrlObserverState::OK,
             data_state: DataObserverState::OK,
             ack_state: ACKObserverState::OK,
+            exit_kind: ExitKind::Ok,
             ctrl_seq: Vec::new(),
+            match_nums: 0,
         }
     }
 }
@@ -59,6 +91,7 @@ impl PartialEq for Deduplication {
         self.ctrl_state == other.ctrl_state &&
         self.data_state == other.data_state &&
         self.ack_state == other.ack_state &&
+        self.exit_kind == other.exit_kind &&
         cmp_ctrl_frames(self.ctrl_seq.clone(),other.ctrl_seq.clone())
     }
 }
@@ -71,7 +104,11 @@ pub struct DifferFeedback {
     diff_ctrl_ob_handle: Handle<DifferentialRecvControlFrameObserver>,
     diff_data_ob_handle: Handle<DifferentialRecvDataFrameObserver>,
     diff_ack_ob_handle: Handle<DifferentialACKRangeObserver>,
+    misc_ob_handle: Handle<DifferentialMiscObserver>,
     history_object:Vec<Deduplication>,
+    pub srand_seed: u32,
+    pub first_pcap_path: String,
+    pub second_pcap_path: String,
 }
 
 impl<S> Feedback<S> for DifferFeedback
@@ -91,6 +128,10 @@ where
         EM: EventFirer<State = S>,
         OT: ObserversTuple<S>,
     {
+        let misc_ob = _observers.get(&self.misc_ob_handle).unwrap();
+        self.srand_seed = misc_ob.srand_seed;
+        self.first_pcap_path = misc_ob.first_pcap_name.clone();
+        self.second_pcap_path = misc_ob.second_pcap_name.clone();
         
         // let observer = _observers.get(&self.observer_handle).unwrap();
         let diff_cc_ob = _observers.get(&self.diff_cc_ob_handle).unwrap();
@@ -103,42 +144,59 @@ where
         let mut interesting_flag = false;
         let diff_cc_ob_judge_type = diff_cc_ob.judge_type();
         if *diff_cc_ob_judge_type != CCTimesObserverState::OK && *diff_cc_ob_judge_type != CCTimesObserverState::MistypeCCReason {
-            error!("vul of CC testcase");
+            warn!("vul of CC testcase: {:?}",diff_cc_ob_judge_type);
             interesting_flag = true;
         }
         if *diff_cpu_ob.judge_type() != CPUUsageObserverState::OK {
-            error!("vul of CPU testcase");
+            warn!("vul of CPU testcase: {:?}",diff_cpu_ob.judge_type());
             interesting_flag = true;
         }
         if *diff_mem_ob.judge_type() != MemObserverState::OK && *diff_mem_ob.judge_type() != MemObserverState::BothMemLeak {
-            error!("vul of Mem testcase");
+            warn!("vul of Mem testcase: {:?}",diff_mem_ob.judge_type());
             interesting_flag = true;
         }
         if *diff_ctrl_ob.judge_type() != CtrlObserverState::OK {
-            error!("vul of Control Frame testcase");
+            warn!("vul of Control Frame testcase: {:?}",diff_ctrl_ob.judge_type());
             interesting_flag = true;
         }
         if *diff_data_ob.judge_type() != DataObserverState::OK {
-            error!("vul of Data Frame testcase");
+            warn!("vul of Data Frame testcase: {:?}",diff_data_ob.judge_type());
             interesting_flag = true;
         }
         if *diff_ack_ob.judge_type() != ACKObserverState::OK {
-            error!("vul of ACK Range testcase");
+            warn!("vul of ACK Range testcase: {:?}",diff_ack_ob.judge_type());
+            interesting_flag = true;
+        }
+        if _exit_kind != &ExitKind::Ok {
+            error!("vul of ExitKind testcase: {:?}",_exit_kind);
             interesting_flag = true;
         }
         if interesting_flag {
             let mut new_deduplication = Deduplication::new();
+            new_deduplication.match_nums = 1;
             new_deduplication.cc_time_state = diff_cc_ob.judge_type().clone();
             new_deduplication.cpu_usage_state = diff_cpu_ob.judge_type().clone();
             new_deduplication.mem_state = diff_mem_ob.judge_type().clone();
             new_deduplication.ctrl_state = diff_ctrl_ob.judge_type().clone();
             new_deduplication.data_state = diff_data_ob.judge_type().clone();
             new_deduplication.ack_state = diff_ack_ob.judge_type().clone();
+            new_deduplication.exit_kind = _exit_kind.clone();
             new_deduplication.ctrl_seq = diff_ctrl_ob.get_ctrl_frames();
-            for old_object in self.history_object.iter() {
+            for old_object in self.history_object.iter_mut() {
                 if old_object == &new_deduplication {
-                    error!("Deduplication testcase");
-                    return Ok(false);
+                    if old_object.match_nums > 0 {
+                        warn!("Deduplication testcase");
+                        if new_deduplication.exit_kind == ExitKind::Crash {
+                            warn!("Crash testcase");
+                            return Ok(true);
+                        }
+                        return Ok(false);
+                    }
+                    else {
+                        old_object.match_nums += 1;
+                        error!("Deduplicate but interesting testcase");
+                        return Ok(true);
+                    }
                 }
             }
             self.history_object.push(new_deduplication);
@@ -162,16 +220,32 @@ where
         OT: ObserversTuple<S>,
         EM: EventFirer<State = S>,
     {
-        // let observer = observers.get(&self.observer_handle).unwrap();
-        // if true {
-        //     info!("Appending Differ Interesting testcase");
-        // }
+        let new_Path = format!("./crashes/seed_{:?}",self.srand_seed);
+        *testcase.file_path_mut()  = Some(std::path::PathBuf::from(new_Path.clone()));
+        info!("Stored input to disk:: {:?}",new_Path);
+        // ./path/to/crashes/0fac37e6127023ae -> ./path/to/crashes/
         Ok(())
     }
 
     /// Discard the stored metadata in case that the testcase is not added to the corpus
     #[inline]
     fn discard_metadata(&mut self, _state: &mut S, _input: &S::Input) -> Result<(), Error> {
+        
+        let _ = Command::new("sudo")
+        .arg("rm")
+        .arg("-f")
+        .arg(&self.first_pcap_path)
+        .output() // 捕获 `touch` 的输出
+        .expect("Failed to create empty pcap file");
+        let _ = Command::new("sudo")
+        .arg("rm")
+        .arg("-f")
+        .arg(&self.second_pcap_path)
+        .output() // 捕获 `touch` 的输出
+        .expect("Failed to create empty pcap file");
+
+        info!("delete pcap file: {:?}",&self.first_pcap_path);
+        info!("delete pcap file: {:?}",&self.second_pcap_path);
         Ok(())
     }
 
@@ -199,6 +273,7 @@ impl DifferFeedback {
                 diff_ctrl_ob: &DifferentialRecvControlFrameObserver,
                 diff_data_ob: &DifferentialRecvDataFrameObserver,
                 diff_ack_ob: &DifferentialACKRangeObserver,
+                misc_ob: &DifferentialMiscObserver,
     ) -> Self {
         Self {
             diff_cc_ob_handle: diff_cc_ob.handle(),
@@ -207,6 +282,10 @@ impl DifferFeedback {
             diff_ctrl_ob_handle: diff_ctrl_ob.handle(),
             diff_data_ob_handle: diff_data_ob.handle(),
             diff_ack_ob_handle: diff_ack_ob.handle(),
+            misc_ob_handle: misc_ob.handle(),
+            srand_seed: 0,
+            first_pcap_path: String::new(),
+            second_pcap_path: String::new(),
             history_object: Vec::new(),
         }
     }

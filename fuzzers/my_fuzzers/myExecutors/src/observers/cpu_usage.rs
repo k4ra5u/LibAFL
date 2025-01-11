@@ -21,8 +21,8 @@ use std::thread::sleep;
 #[derive(Debug, Serialize, Deserialize,Clone,PartialEq)]
 pub enum CPUUsageObserverState {
     OK,
-    FirstCC,
-    SecondCC,
+    FirstCPU,
+    SecondCPU,
 }
 
 #[derive( Serialize, Deserialize,Debug, Clone)]
@@ -66,7 +66,7 @@ impl CPUUsageObserver {
         let cpu_ids = self.cpu_ids.clone();
 
         // 获取当前的进程和指定CPU核心的时间
-        let curr_process_time = get_process_cpu_time(pid).expect("Failed to get process CPU time");
+        let curr_process_time = get_process_cpu_time(pid).expect(&format!("Failed to get process CPU time:{}", pid));
         let curr_cpu_times = get_cpu_time(&cpu_ids).expect("Failed to get CPU core times");
 
         // 克隆 curr_cpu_times 以避免移动
@@ -98,7 +98,7 @@ impl CPUUsageObserver {
         let cpu_ids = self.cpu_ids.clone();
 
         // 获取当前的进程和指定CPU核心的时间
-        let curr_process_time = get_process_cpu_time(pid).expect("Failed to get process CPU time");
+        let curr_process_time = get_process_cpu_time(pid).expect( &format!("Failed to get process CPU time:{}", pid));
         let curr_cpu_times = get_cpu_time(&cpu_ids).expect("Failed to get CPU core times");
 
         // 克隆 curr_cpu_times 以避免移动
@@ -149,6 +149,12 @@ impl CPUUsageObserver {
         self.add_record_cpu_usage(cur_cpu_usage);
         self.add_frame_record_times();
     }
+    pub fn judge_proc_exist(&self) -> bool {
+        let pid = self.pid;
+        let ps_pid = format!("/proc/{}", pid);
+        let path = absolute(&ps_pid).unwrap();
+        path.exists()
+    }
 
 
 }
@@ -173,6 +179,12 @@ where
         _input: &S::Input,
         _exit_kind: &ExitKind,
     ) -> Result<(), Error> {
+        if !self.judge_proc_exist() {
+            self.set_final_based_cpu_usage(0.0);
+            self.set_final_cpu_usage(0.0);
+            // info!("post_exec of CPUUsageObserver: {:?},{:?}", self.name,self.final_based_cpu_usage);
+            return Ok(());
+        }
         let final_cpu_usage = self.get_cur_cpu_usage_imut();
         let mut total_cpu = 0.0;
         for record_cpu in self.record_cpu_usages.iter() {
@@ -181,7 +193,7 @@ where
         let avg_cpu = total_cpu / self.record_times as f64;
         self.set_final_based_cpu_usage(avg_cpu);
         self.set_final_cpu_usage(final_cpu_usage);
-        info!("post_exec of CPUUsageObserver: {:?},{:?}", self.name,self.final_based_cpu_usage);
+        // info!("post_exec of CPUUsageObserver: {:?},{:?}", self.name,self.final_based_cpu_usage);
         Ok(())
     }
 }
@@ -238,12 +250,14 @@ impl DifferentialCPUUsageObserver {
         let first_cpu_usage = self.first_observer.final_based_cpu_usage;
         let second_cpu_usage = self.second_observer.final_based_cpu_usage;
         if first_cpu_usage > second_cpu_usage && first_cpu_usage - second_cpu_usage > 40.0 {
-            self.judge_type = CPUUsageObserverState::FirstCC;
+            self.judge_type = CPUUsageObserverState::FirstCPU;
         } else if second_cpu_usage > first_cpu_usage && second_cpu_usage - first_cpu_usage > 40.0 {
-            self.judge_type = CPUUsageObserverState::SecondCC;
+            self.judge_type = CPUUsageObserverState::SecondCPU;
         } else {
             self.judge_type = CPUUsageObserverState::OK;
         }
+        info!("{:?},{:?}", self.first_observer.name,self.first_observer.final_based_cpu_usage);
+        info!("{:?},{:?}", self.second_observer.name,self.second_observer.final_based_cpu_usage);
         self.first_observer = CPUUsageObserver::new("fake");
         self.second_observer = CPUUsageObserver::new("fake");
 

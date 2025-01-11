@@ -196,6 +196,8 @@ where
                 "No input available for testcase. Could not store anything.",
             ));
         };
+        /* PATCH */
+        // info!("Storing input to disk: {:?}", file_path);
         input.to_file(file_path)
     }
 }

@@ -18,8 +18,8 @@ use libafl::{
 
 #[derive(Debug, Serialize, Deserialize,Clone,PartialEq)]
 pub struct Frame_info {
-    frame: frame::Frame,
-    frame_num: usize,
+    pub frame: frame::Frame,
+    pub frame_num: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize,Clone)]
@@ -187,7 +187,7 @@ where
         _input: &S::Input,
         _exit_kind: &ExitKind,
     ) -> Result<(), Error> {
-        info!("post_exec of RecvControlFrameObserver: {:?}", self);
+        // info!("post_exec of RecvControlFrameObserver: {:?}", self);
         Ok(())
     }
 }
@@ -262,7 +262,7 @@ where
         _exit_kind: &ExitKind,
     ) -> Result<(), Error> {
         debug!("post_exec of RecvDataFrameObserver: {:?}", self);
-        info!("post_exec of RecvDataFrameObserver: crypto:{:?}, stream:{:?}, pr:{:?}, dgram:{:?}", self.crypto_frames_list.len(), self.stream_frames_list.len(), self.pr_frames_list.len(), self.dgram_frames_list.len());
+        // info!("post_exec of RecvDataFrameObserver: crypto:{:?}, stream:{:?}, pr:{:?}, dgram:{:?}", self.crypto_frames_list.len(), self.stream_frames_list.len(), self.pr_frames_list.len(), self.dgram_frames_list.len());
         Ok(())
     }
 }
@@ -416,7 +416,7 @@ where
         _exit_kind: &ExitKind,
     ) -> Result<(), Error> {
         self.minimize_ACK_range_mut();
-        info!("post_exec of ACKRangeObserver: {:?}", self);
+        // info!("post_exec of ACKRangeObserver: {:?}", self);
         Ok(())
     }
 }
@@ -504,6 +504,8 @@ impl DifferentialRecvControlFrameObserver {
                 }
             }
         }
+        info!("FirControlOb:{:?}", self.first_observer);
+        info!("SecControlOb:{:?}", self.second_observer);
         self.first_observer = RecvControlFrameObserver::new("fake");
         self.second_observer = RecvControlFrameObserver::new("fake");
     }
@@ -638,7 +640,7 @@ impl DifferentialRecvDataFrameObserver {
                 }
             }
         }
-        if abs(first_crypto_data_len as isize - second_crypto_data_len as isize) > 1000 {
+        if abs(first_crypto_data_len as isize - second_crypto_data_len as isize) > 5000 {
             self.judge_type = DataObserverState::DataFrameCryptoContentMismatch;
             return false;
         }
@@ -716,11 +718,11 @@ impl DifferentialRecvDataFrameObserver {
                 }
             }
         }
-        if first_stream_data_dismatch_len > 1000 || second_stream_data_dismatch_len > 1000 {
+        if first_stream_data_dismatch_len > 5000 || second_stream_data_dismatch_len > 5000 {
             self.judge_type = DataObserverState::DataFrameStreamContentMismatch;
             return false;
         }
-        if abs(first_stream_data_len as isize - second_stream_data_len as isize) > 1000 {
+        if abs(first_stream_data_len as isize - second_stream_data_len as isize) > 5000 {
             self.judge_type = DataObserverState::DataFrameStreamContentLenMismatch;
             return false;
         }
@@ -868,6 +870,8 @@ impl DifferentialRecvDataFrameObserver {
         } else if self.check_pr_frame_content() == false {
         } else if self.check_dgram_frame_content() == false {
         }
+        info!("FirDataOb: crypto:{:?}, stream:{:?}, pr:{:?}, dgram:{:?}", self.first_observer.crypto_frames_list.len(), self.first_observer.stream_frames_list.len(), self.first_observer.pr_frames_list.len(), self.first_observer.dgram_frames_list.len());
+        info!("SecDataOb: crypto:{:?}, stream:{:?}, pr:{:?}, dgram:{:?}", self.second_observer.crypto_frames_list.len(), self.second_observer.stream_frames_list.len(), self.second_observer.pr_frames_list.len(), self.second_observer.dgram_frames_list.len());
         self.set_initial_observer();
 
     }
@@ -1075,6 +1079,8 @@ impl DifferentialACKRangeObserver {
                 }
             }
         }
+        info!("FirACKOb:{:?}", self.first_observer);
+        info!("SecACKOb:{:?}", self.second_observer);
         self.first_observer = ACKRangeObserver::new("fake");
         self.second_observer = ACKRangeObserver::new("fake");
     }

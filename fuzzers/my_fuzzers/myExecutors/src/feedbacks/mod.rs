@@ -12,3 +12,5 @@ pub mod ucb_fb;
 pub use ucb_fb::*;
 pub mod differ_fb;
 pub use differ_fb::*;
+pub mod misc_fb;
+pub use misc_fb::*;

@@ -47,7 +47,7 @@ where
         OT: ObserversTuple<S>,
     {
         let random0_1 = rand::random::<bool>();
-        Ok(random0_1)
+        Ok(true)
     }
 
     /// Append to the testcase the generated metadata in case of a new corpus item

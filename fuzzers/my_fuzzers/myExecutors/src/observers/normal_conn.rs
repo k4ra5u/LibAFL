@@ -55,7 +55,7 @@ impl NormalConnObserver {
             ip: ip,
             port: port,
             server_name: server_name,
-            pre_spend_time: Duration::new(0,0),
+            pre_spend_time: Duration::new(5,0),
             post_spend_time: Duration::new(0,0),
             unable_to_connect: false,
         }
@@ -468,7 +468,10 @@ where
 {
 
     fn pre_exec(&mut self, _state: &mut S, _input: &S::Input) -> Result<(), Error> {
-        self.calc_pre_spend_time();
+        // self.calc_pre_spend_time();
+        self.pre_spend_time = Duration::new(5,0);
+        self.post_spend_time = Duration::new(0,0);
+        self.unable_to_connect = false;
         Ok(())
     }
 
@@ -479,7 +482,8 @@ where
         _exit_kind: &ExitKind,
     ) -> Result<(), Error> {
         self.calc_post_spend_time();
-        debug!("post_exec of NormalConnObserver: {:?}", self);
+        info!("{:?}",self);
+        // info!("post_exec of NormalConnObserver: {:?}", self);
         Ok(())
     }
 }
