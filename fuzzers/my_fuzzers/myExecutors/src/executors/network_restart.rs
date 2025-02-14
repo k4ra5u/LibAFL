@@ -49,48 +49,9 @@ const HTTP_REQ_STREAM_ID: u64 = 4;
 
 /// For experiment only, please use `STNyxExecutor` in production.
 
-fn gen_pcap_path() -> String {
-    let rand_str: String = thread_rng()
-        .sample_iter(&Alphanumeric)
-        .take(8)
-        .map(char::from)
-        .collect();
-    let pcaps_dir = env::var("PCAPS_DIR").unwrap();
-    format!("{}/{}.pcap", pcaps_dir, rand_str)
-}
-
-fn start_capture(port: u16,pcap_path:String) -> std::process::Child {
-
-    let filter = format!("udp port {}", port);
-    let _ = Command::new("sudo")
-        .arg("touch")
-        .arg(&pcap_path)
-        .output() // 捕获 `touch` 的输出
-        .expect("Failed to create empty pcap file");
-
-    sleep(Duration::from_millis(10));
-
-    // 捕获 stdout 和 stderr
-    Command::new("sudo")
-        .arg("tshark")
-        .arg("-i")
-        .arg("lo")
-        .arg("-f")
-        .arg(&filter)
-        .arg("-w")
-        .arg(pcap_path)
-        .stdout(Stdio::piped()) // 捕获输出
-        .stderr(Stdio::piped()) // 捕获错误
-        .spawn()
-        .expect("Failed to start capture process")
-}
 
 
-fn stop_capture(mut child: std::process::Child) {
-    debug!("Stopping capture");
-    child.kill().expect("Failed to stop capture");
-    child.wait().expect("Failed to wait for process termination");
-}
+
 pub struct NetworkRestartExecutor<OT, S, SP>
 where SP: ShMemProvider,
 {
@@ -265,16 +226,19 @@ SP: ShMemProvider,
             if self.pid != mem_observer.pid {
                 mem_observer.initial_mem = 0;
                 mem_observer.set_pid(self.pid);
-                let map_file = format!("/proc/{}/maps", mem_observer.pid);
-                let file = File::open(map_file).unwrap();
-                let reader = io::BufReader::new(file);
-                for cur_line in reader.lines() {
-                    let line = cur_line.unwrap();
-                    if let Some((start, end)) = mem_observer.parse_rw_memory_range(&line) {
-                        mem_observer.initial_mem += end - start;
-                    }
+            }
+            mem_observer.before_mem = 0;
+            let map_file = format!("/proc/{}/maps", mem_observer.pid);
+            let file = File::open(map_file).unwrap();
+            let reader = io::BufReader::new(file);
+            for cur_line in reader.lines() {
+                let line = cur_line.unwrap();
+                if let Some((start, end)) = mem_observer.parse_rw_memory_range(&line) {
+                    mem_observer.before_mem += end - start;
                 }
-                mem_observer.before_mem = mem_observer.initial_mem;
+            }
+            if mem_observer.initial_mem == 0 {
+                mem_observer.initial_mem = mem_observer.before_mem;
             }
         }
     }
@@ -336,6 +300,7 @@ SP: ShMemProvider,
         }
         return true
     }
+
     pub fn update_second_cpu_usage_obs(&mut self,cur_cpu_usages: Vec<f64>) ->bool {
         let cpu_usage_observer_ref = CPUUsageObserver::new("second_cpu_usage").handle();
         if let Some(cpu_usage_observer) = self.observers.get_mut(&cpu_usage_observer_ref) {
@@ -360,7 +325,13 @@ SP: ShMemProvider,
             cc_times_observer.pkn = pkn;
             cc_times_observer.error_code = error_code;
             cc_times_observer.frame_type = frame_type;
-            cc_times_observer.reason = reason;
+            cc_times_observer.reason = match String::from_utf8(reason) {
+                Ok(val) => val,
+                Err(e) => {
+                    error!("Failed to convert reason to UTF-8: {}", e);
+                    "Invalid UTF-8".to_string()
+                }
+            };
         }
     }
 
@@ -372,6 +343,7 @@ SP: ShMemProvider,
             });
         }
     }
+
     pub fn ctrl_observer_add_frame(&mut self, frames:Vec<Frame>) {
         let ctrl_observer_ref = RecvControlFrameObserver::new("ctrl").handle();
         if let Some(ctrl_observer) = self.observers.get_mut(&ctrl_observer_ref) {
@@ -499,12 +471,22 @@ SP: ShMemProvider,
         self.data_observer_add_frame(crypto_frames,stream_frames,pr_frames,dgram_frames);
     }
 
+    pub fn pcap_observer_update_get_name(&mut self) -> String {
+        let pcap_observer_ref = PcapObserver::new("pcap").handle();
+        if let Some(pcap_observer) = self.observers.get_mut(&pcap_observer_ref) {
+            pcap_observer.port = self.port;
+            pcap_observer.new_record.port = self.port;
+            pcap_observer.new_record.name.clone()
+        }
+        else {
+            String::new()
+        }
+    }
 
     pub fn sync_srand_seed_path(&mut self,pcap_path:String) {
         let misc_observer_ref = MiscObserver::new("misc").handle();
         if let Some(misc_observer) = self.observers.get_mut(&misc_observer_ref) {
             misc_observer.srand_seed =  self.frame_rand_seed;
-            misc_observer.pcap_path = pcap_path.clone();
         }
     }
 
@@ -635,7 +617,7 @@ where
         //let mut observers: RefIndexable<&mut OT, OT> = self.observers_mut();
         // info!("now seed:{:?}",self.frame_rand_seed);
         let mut is_first = false;
-        if self.start_command.contains("h2o.sh") {
+        if self.start_command.contains("lsquic.sh") {
             is_first = true;
         }
         if state.rand_seed() != 0{
@@ -644,8 +626,11 @@ where
                 state.set_rand_seed(0);
             }
         }
-        let pcap_path = gen_pcap_path();
+        //TODO: del
+        // let pcap_path = gen_pcap_path();
+        let pcap_path = self.pcap_observer_update_get_name();
         self.sync_srand_seed_path(pcap_path.clone());
+
         unsafe { srand(self.frame_rand_seed); }
         self.frame_rand_seed = unsafe {rand().try_into().unwrap()};
         // info!("now {:?} corpus",state.corpus().count());
@@ -674,27 +659,27 @@ where
         for (key, value) in &self.envs {
             std::env::set_var(key, value);
         }
-        let res = self.judge_server_status();
-        // 快照功能不完善，目前每次fuzz重启服务
-        if res !=0 {
-            std::process::Command::new("sh").arg("-c").arg(format!("kill -9 {}",res))
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .unwrap();
-        }
+        // let res = self.judge_server_status();
+        // // 快照功能不完善，目前每次fuzz重启服务
+        // // 尝试不重启服务，只重新建立连接
+        // if res !=0 {
+        //     std::process::Command::new("sh").arg("-c").arg(format!("kill -9 {}",res))
+        //     .stdout(Stdio::null())
+        //     .stderr(Stdio::null())
+        //     .status()
+        //     .unwrap();
+        // }
         let mut pid = self.judge_server_status();
         // 如果服务未启动，则启动服务
         // warn!("non_res_times:{:?} recv_pkts:{:?}",self.non_res_times,self.recv_pkts);
         if pid == 0 || self.pid == 0 {
             while(true) {
                 std::process::Command::new("sh").arg("-c").arg(&self.start_command)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
+                .output()
                 .unwrap();
-                sleep(Duration::from_millis(50));
+                sleep(Duration::from_millis(500));
                 pid = self.judge_server_status();
+                // info!("pid:{:?}",pid);
                 if pid == 0 {
                     error!("Failed to start server");
                 }
@@ -702,11 +687,10 @@ where
                     break;
                 }
             }
-
+            self.pid = pid;
         }
-        self.pid = pid;
-
         self.set_initial_mem_usage();
+
 
          if is_first {
             self.inital_first_cpu_usage_obs();
@@ -716,56 +700,58 @@ where
             // self.get_first_cpu_usage_ob_mut();
         };
 
-        let mut capture_process = start_capture(self.port,pcap_path.clone());
-        sleep(Duration::from_millis(1000));
+        // let mut capture_process = start_capture(self.port,pcap_path.clone());
+        // sleep(Duration::from_millis(500));
         self.nor_conn_ob_connect();
-        
 
-        //quic_st 必须存在，检查 quic_st 合法性
-        let mut valid_quic_st = false;
-        // if let Some(quic_st) = self.quic_st.as_ref() {
-        //     valid_quic_st = quic_st.judge_conn_status();
-        // } 
-        if valid_quic_st == false || self.non_res_times >= 3{
-            debug!("judged connection closed");
-            self.rebuild_quic_struct();
-            // self.change_non_res_times(0);
-            // self.change_recv_pkts(0);
-        }
-        
-        let mut quic_st = self.quic_st.as_mut().unwrap();
         let cpu_usage_observer_ref = if is_first {
             CPUUsageObserver::new("first_cpu_usage").handle()
         } else {
             CPUUsageObserver::new("second_cpu_usage").handle()
         };
-        let cpu_usage_observer = self.observers.get_mut(&cpu_usage_observer_ref).unwrap();
-        // let cc_time_observer_ref = CCTimesObserver::new("cc_times").handle();
-        // let cc_time_observer = self.observers.get_mut(&cc_time_observer_ref).unwrap();
-        // let ctrl_observer_ref = RecvControlFrameObserver::new("ctrl").handle();
-        // let ctrl_observer = self.observers.get_mut(&ctrl_observer_ref).unwrap();
-        // let data_observer_ref = RecvDataFrameObserver::new("data").handle();
-        // let data_observer = self.observers.get_mut(&data_observer_ref).unwrap();
-        // let ack_observer_ref = ACKRangeObserver::new("ack").handle();
-        // let ack_observer = self.observers.get_mut(&ack_observer_ref).unwrap();
+
+        
+        //quic_st 必须存在，检查 quic_st 合法性
+        let mut valid_quic_st = false;
+        if valid_quic_st == false || self.non_res_times >= 3{
+            debug!("judged connection closed");
+            self.rebuild_quic_struct();
+        }
+        
+       
+        let mut quic_st = self.quic_st.as_mut().unwrap();
         match & mut quic_st.conn  {
             //conn不存在：重新建立连接
             None => {
-                match quic_st.connect() {
-                    Err(e) => {
-                        error!("Failed to connect: {:?}", e);
-                        //eprintln!("Failed to connect: {:?}", e);
-                        exit_kind = ExitKind::Crash;
-                        stop_capture(capture_process);
-                        return Ok(exit_kind);
-                    },
-                    Ok(_) => (),
+                for i in 0..5 {
+                    self.rebuild_quic_struct();
+                    quic_st = self.quic_st.as_mut().unwrap();
+                    match quic_st.connect() {
+                        Err(e) => {
+                            error!("Failed to connect: {:?}", e);
+                            sleep(Duration::from_secs(5));
+                            //eprintln!("Failed to connect: {:?}", e);
+                            exit_kind = ExitKind::Crash;
+                        },
+                        Ok(_) => {
+                            exit_kind = ExitKind::Ok;
+                            break;
+                        },
+                    }
                 }
+
             },
             
             Some(conn) => {
             }
         }
+        if exit_kind == ExitKind::Crash {
+            error!("Failed to connect, markd as crash");
+            // stop_capture(capture_process);
+            return Ok(exit_kind);
+        }
+        let cpu_usage_observer = self.observers.get_mut(&cpu_usage_observer_ref).unwrap();
+
         let binding = input.target_bytes();
         let mut inputs = binding.as_slice();        
         let mut input_struct = InputStruct::new();
@@ -859,7 +845,8 @@ where
                         if !cpu_usage_observer.judge_proc_exist() {
                             error!("cannot find process");
                             exit_kind = ExitKind::Crash;
-                            stop_capture(capture_process);
+                            // stop_capture(capture_process);
+                            info!("total send&recv frames : {:?} {:?}", total_sent_frames, total_recv_frames_len);
                             return Ok(exit_kind);
                         }
                         // 每发送100个包统计一下CPU使用率，不然统计的太多了
@@ -932,7 +919,7 @@ where
         if !valid_cpu_usage {
             error!("cannot find process while updating cpu usage");
             exit_kind = ExitKind::Crash;
-            stop_capture(capture_process);
+            // stop_capture(capture_process);
             return Ok(exit_kind);
         }
 
@@ -953,7 +940,7 @@ where
             exit_kind = ExitKind::Ok;
         }
 
-        stop_capture(capture_process);
+        // stop_capture(capture_process);
         
         Ok(exit_kind)
     }

@@ -29,7 +29,7 @@ pub struct CCTimesObserver {
     pub pkn: u64,
     pub error_code: u64,
     pub frame_type: u64,
-    pub reason: Vec<u8>,
+    pub reason: String,
     pub srand_seed: u32,
 
 }
@@ -43,7 +43,7 @@ impl CCTimesObserver {
             pkn: 0,
             error_code: 0,
             frame_type : 0,
-            reason: Vec::new(),
+            reason: String::new(),
             srand_seed: 0,
         }
     }
@@ -59,7 +59,7 @@ where
         self.pkn = 0;
         self.error_code = 0;
         self.frame_type = 0;
-        self.reason = Vec::new();
+        self.reason = String::new();
         Ok(())
     }
 

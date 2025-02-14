@@ -12,7 +12,7 @@ use libafl_bolts::{
 };
 use libafl_bolts::alloc::{borrow::Cow, vec::Vec};
 
-use log::{info, warn,debug};
+use log::{debug, error, info, warn};
 use nix::sys::select;
 use quiche::{frame, packet, stream, Connection, ConnectionId, Header};
 use ring::aead::quic;
@@ -139,11 +139,11 @@ where
     ) -> Result<MutationResult, Error> {
         debug!("QuicSendRecvTimesMutator");
         let mut quic_corp = quic_input::InputStruct_deserialize(input.bytes());
-        let mut changed_recv_time = state.rand_mut().below(1000);
-        //let mut changed_send_time = state.rand_mut().below(1000);
-        let mut changed_send_time = 200;
-        if changed_recv_time < changed_send_time {
-            changed_recv_time = changed_send_time;
+        let eq_flag = state.rand_mut().below(2);
+        let mut changed_recv_time = 1000;
+        let mut changed_send_time = 1000;
+        if eq_flag == 0 {
+            changed_send_time = state.rand_mut().below(1000);
         }
         quic_corp.recv_timeout = changed_recv_time as u64;
         quic_corp.send_timeout = changed_send_time as u64;
@@ -233,6 +233,16 @@ where
     ) -> Result<MutationResult, Error> {
         debug!("QuicFrameCyclesMutator");
         let mut quic_corp = quic_input::InputStruct_deserialize(input.bytes());
+        if quic_corp.frames_cycle.len() >=4 {
+            return Ok(MutationResult::Skipped);
+        }
+        let mut frame_cycle1 = FramesCycleStruct::new();
+        frame_cycle1 = frame_cycle1.set_repeat_num(100);
+        let pad_frame = frame::Frame::Padding { len: (10) };
+        frame_cycle1 = frame_cycle1.add_frame(pad_frame);
+        
+        quic_corp = quic_corp.add_frames_cycle(frame_cycle1);
+        quic_corp = quic_corp.calc_frames_cycle_len();
 
         let changed_bytes = quic_corp.serialize();
         input.resize(changed_bytes.len(), 0);
@@ -271,8 +281,11 @@ where
         let frames_cycle_len = quic_corp.frames_cycle.len();
         let selected_cycle = state.rand_mut().below(frames_cycle_len);
         let base_repeat_num = quic_corp.frames_cycle[selected_cycle].repeat_num;
-        //let changed_repeat_num = state.rand_mut().between(base_repeat_num >> 1, base_repeat_num << 1);
-        let changed_repeat_num = base_repeat_num +10;
+        let mut changed_repeat_num = state.rand_mut().between(base_repeat_num >> 1, base_repeat_num << 1);
+        if changed_repeat_num > 300 {
+            changed_repeat_num = changed_repeat_num % 300;
+        }
+        // let changed_repeat_num = base_repeat_num +10;
         quic_corp.frames_cycle[selected_cycle].repeat_num = changed_repeat_num;
         let changed_bytes = quic_corp.serialize();
         input.resize(changed_bytes.len(), 0);
@@ -312,6 +325,10 @@ where
         let frames_cycle_len = quic_corp.frames_cycle.len();
         let selected_cycle = state.rand_mut().below(frames_cycle_len);
         let frames_len = quic_corp.frames_cycle[selected_cycle].basic_frames.len();
+        if frames_len == 0 {
+            quic_corp.frames_cycle.remove(selected_cycle);
+            return Ok(MutationResult::Skipped);
+        }
         let selected_frame = state.rand_mut().below(frames_len);
         let mut frame = quic_corp.frames_cycle[selected_cycle].basic_frames[selected_frame].clone();
 
@@ -355,15 +372,17 @@ where
         let mut quic_corp = quic_input::InputStruct_deserialize(input.bytes());
         let frames_cycle_len = quic_corp.frames_cycle.len();
         let selected_cycle = state.rand_mut().below(frames_cycle_len);
+        if quic_corp.frames_cycle[selected_cycle].basic_frames.len() >= 5 {
+            return Ok(MutationResult::Skipped);
+        }
         
-        // TODO: 更加精细化的生成一个新的frame，需要修改现行的state，加入当前连接的状态
-        let mut buf = vec![61u8; 100];
+        let mut buf = vec![61u8; 1001];
         buf[0] = state.rand_mut().below(25) as u8;
-        for i in 1..100 {
+        for i in 1..1001 {
             buf[i] = state.rand_mut().below(256) as u8;
         }
         let mut buf_slice: &[u8] = &buf;
-        let frame = gen_quic_frame(&mut buf_slice, 100).unwrap();
+        let frame = gen_quic_frame(&mut buf_slice).unwrap();
         quic_corp.frames_cycle[selected_cycle].basic_frames.push(frame);
 
 
@@ -411,12 +430,15 @@ where
             return Ok(MutationResult::Skipped);
         }   
         if frames_len == 0 {
+            quic_corp.frames_cycle.remove(selected_cycle);
             return Ok(MutationResult::Skipped);
         }
         let selected_frame = state.rand_mut().below(frames_len);
         quic_corp.frames_cycle[selected_cycle].basic_frames.remove(selected_frame);
+        // info!("{:?},{:?}",quic_corp.frames_cycle.len(),quic_corp.frames_cycle[selected_cycle].basic_frames.len());
         if frames_len == 1 {
             quic_corp.frames_cycle.remove(selected_cycle);
+            // info!("removed seelected cycle");
         }
 
 
@@ -460,7 +482,15 @@ where
         let frames_cycle_len = quic_corp.frames_cycle.len();
         let selected_cycle = state.rand_mut().below(frames_cycle_len);
         let frames_len = quic_corp.frames_cycle[selected_cycle].basic_frames.len();
+        if frames_len == 0 {
+            quic_corp.frames_cycle.remove(selected_cycle);
+            return Ok(MutationResult::Skipped);
+        }
         let selected_frame = state.rand_mut().below(frames_len);
+        if frames_cycle_len == 0 || frames_len == 0 {
+            error!("frames_cycle_len:{:?},frames_len:{:?}",frames_cycle_len,frames_len);
+            return Ok(MutationResult::Skipped);
+        }
         let frame = match quic_corp.frames_cycle[selected_cycle].basic_frames[selected_frame].clone() {
             frame::Frame::Padding { len } => {
                 let changed_len = state.rand_mut().between(0, 1200);
@@ -468,7 +498,7 @@ where
             },
             frame::Frame::Ping { mtu_probe } => {
                 if let Some(mtu_probe) = mtu_probe {
-                    let changed_mtu_probe = state.rand_mut().between(mtu_probe >> 2, mtu_probe << 2);
+                    let changed_mtu_probe = state.rand_mut().between(mtu_probe >> 1, mtu_probe << 1) & 0x3FFFFFFFFFFFFFFF;
                     frame::Frame::Ping { mtu_probe: Some(changed_mtu_probe) }
                 } else {
                     frame::Frame::Ping { mtu_probe: None }
@@ -478,7 +508,7 @@ where
                 let change_type = state.rand_mut().below(3);
                 match change_type {
                     0 => {
-                        let changed_ack_delay = state.rand_mut().between(ack_delay as usize >> 2, (ack_delay << 2).try_into().unwrap());
+                        let changed_ack_delay = state.rand_mut().between(ack_delay as usize >> 1, (ack_delay << 1).try_into().unwrap()) & 0x3FFFFFFFFFFFFFFF;
                         frame::Frame::ACK { ack_delay: changed_ack_delay as u64, ranges: ranges.clone(), ecn_counts: ecn_counts.clone() }
                     },
                     1 => {
@@ -506,15 +536,15 @@ where
                 let change_type = state.rand_mut().below(3);
                 match change_type {
                     0 => {
-                        let changed_stream_id = state.rand_mut().between(stream_id as usize >> 2, (stream_id << 2).try_into().unwrap());
+                        let changed_stream_id = state.rand_mut().between(stream_id as usize >> 1, (stream_id << 1).try_into().unwrap()) & 0x3FFFFFFFFFFFFFFF;
                         frame::Frame::ResetStream { stream_id: changed_stream_id as u64, error_code, final_size }
                     },
                     1 => {
-                        let changed_error_code = state.rand_mut().between(error_code as usize >> 2 , (error_code << 2).try_into().unwrap());
+                        let changed_error_code = state.rand_mut().between(error_code as usize >> 1 , (error_code << 1).try_into().unwrap()) & 0x3FFFFFFFFFFFFFFF;
                         frame::Frame::ResetStream { stream_id, error_code: changed_error_code as u64, final_size }
                     },
                     2 => {
-                        let changed_final_size = state.rand_mut().between(final_size as usize >> 2, (final_size << 2).try_into().unwrap());
+                        let changed_final_size = state.rand_mut().between(final_size as usize >> 1, (final_size << 1).try_into().unwrap()) & 0x3FFFFFFFFFFFFFFF;
                         frame::Frame::ResetStream { stream_id, error_code, final_size: changed_final_size as u64 }
                     }
                     _ => unreachable!(),
@@ -525,11 +555,11 @@ where
                 let change_type = state.rand_mut().below(2);
                 match change_type {
                     0 => {
-                        let changed_stream_id = state.rand_mut().between(stream_id as usize >> 2, (stream_id << 2).try_into().unwrap());
+                        let changed_stream_id = state.rand_mut().between(stream_id as usize >> 1, (stream_id << 1).try_into().unwrap()) & 0x3FFFFFFFFFFFFFFF;
                         frame::Frame::StopSending { stream_id: changed_stream_id as u64, error_code }
                     }
                     1 => {
-                        let changed_error_code = state.rand_mut().between(error_code as usize >> 2 , (error_code << 2).try_into().unwrap());
+                        let changed_error_code = state.rand_mut().between(error_code as usize >> 1 , (error_code << 1).try_into().unwrap()) & 0x3FFFFFFFFFFFFFFF;
                         frame::Frame::StopSending { stream_id, error_code: changed_error_code as u64 }
                     }
                     _ => unreachable!(),
@@ -548,21 +578,21 @@ where
                 let change_type = state.rand_mut().below(5);
                 match change_type {
                     0 => {
-                        let changed_start = state.rand_mut().between(data.start >> 2, data.start << 2);
+                        let changed_start = state.rand_mut().between(data.start >> 1, data.start << 1) & 0x3FFFFFFFFFFFFFFF;
                         frame::Frame::Crypto { data: stream::RangeBuf { data: data.data.clone(), start: changed_start, pos: data.pos, len: data.len, off: data.off ,fin: data.fin} }
                     }
                     1 => {
-                        let changed_pos = state.rand_mut().between(data.pos >> 2, data.pos << 2);
+                        let changed_pos = state.rand_mut().between(data.pos >> 1, data.pos << 1) & 0x3FFFFFFFFFFFFFFF;
                         frame::Frame::Crypto { data: stream::RangeBuf { data: data.data.clone(), start: data.start, pos: changed_pos, len: data.len, off: data.off ,fin: data.fin } }
                     }
                     2 => {
-                        let changed_len = state.rand_mut().between(data.len >> 2, data.len << 2);
+                        let changed_len = state.rand_mut().between(data.len >> 1, data.len << 1) & 0x3FFFFFFFFFFFFFFF;
                         // TODO
                         // frame::Frame::Crypto { data: stream::RangeBuf { data: data.data.clone(), start: data.start, pos: data.pos, len: changed_len, off: data.off ,fin: data.fin } }
                         frame::Frame::Crypto { data: stream::RangeBuf { data: data.data.clone(), start: data.start, pos: data.pos, len: data.len, off: data.off ,fin: data.fin } }
                     }
                     3 => {
-                        let changed_off = state.rand_mut().between(data.off as usize >> 2, (data.off << 2).try_into().unwrap());
+                        let changed_off = state.rand_mut().between(data.off as usize >> 1, (data.off << 1).try_into().unwrap()) & 0x3FFFFFFFFFFFFFFF;
                         frame::Frame::Crypto { data: stream::RangeBuf { data: data.data.clone(), start: data.start, pos: data.pos, len: data.len, off: changed_off as u64 ,fin: data.fin } }
                     }
                     4 => {
@@ -576,11 +606,11 @@ where
                 let change_type = state.rand_mut().below(2);
                 match change_type {
                     0 => {
-                        let changed_offset = state.rand_mut().between(offset as usize >> 2, (offset << 2).try_into().unwrap());
+                        let changed_offset = state.rand_mut().between(offset as usize >> 1, (offset << 1).try_into().unwrap()) & 0x3FFFFFFFFFFFFFFF;
                         frame::Frame::CryptoHeader { offset: changed_offset as u64, length }
                     }
                     1 => {
-                        let changed_length = state.rand_mut().between(length as usize >> 2, (length << 2).try_into().unwrap());
+                        let changed_length = state.rand_mut().between(length as usize >> 1, (length << 1).try_into().unwrap()) & 0x3FFFFFFFFFFFFFFF;
                         frame::Frame::CryptoHeader { offset, length: changed_length }
                     }
                     _ => unreachable!(),
@@ -594,21 +624,21 @@ where
                 let change_type = state.rand_mut().below(5);
                 match change_type {
                     0 => {
-                        let changed_start = state.rand_mut().between(data.start >> 2, data.start << 2);
+                        let changed_start = state.rand_mut().between(data.start >> 1, data.start << 1) & 0x3FFFFFFFFFFFFFFF;
                         frame::Frame::Stream { stream_id, data: stream::RangeBuf { data: data.data.clone(), start: changed_start, pos: data.pos, len: data.len, off: data.off ,fin: data.fin} }
                     }
                     1 => {
-                        let changed_pos = state.rand_mut().between(data.pos >> 2, data.pos << 2);
+                        let changed_pos = state.rand_mut().between(data.pos >> 1, data.pos << 1) & 0x3FFFFFFFFFFFFFFF;
                         frame::Frame::Stream { stream_id, data: stream::RangeBuf { data: data.data.clone(), start: data.start, pos: changed_pos, len: data.len, off: data.off ,fin: data.fin } }
                     }
                     2 => {
-                        let changed_len = state.rand_mut().between(data.len >> 2, data.len << 2);
+                        let changed_len = state.rand_mut().between(data.len >> 1, data.len << 1) & 0x3FFFFFFFFFFFFFFF;
                         // TODO
                         // frame::Frame::Stream { stream_id, data: stream::RangeBuf { data: data.data.clone(), start: data.start, pos: data.pos, len: changed_len, off: data.off ,fin: data.fin } }
                         frame::Frame::Stream { stream_id, data: stream::RangeBuf { data: data.data.clone(), start: data.start, pos: data.pos, len: data.len, off: data.off ,fin: data.fin } }
                     }
                     3 => {
-                        let changed_off = state.rand_mut().between(data.off as usize >> 2, (data.off << 2).try_into().unwrap());
+                        let changed_off = state.rand_mut().between(data.off as usize >> 1, (data.off << 1).try_into().unwrap()) & 0x3FFFFFFFFFFFFFFF;
                         frame::Frame::Stream { stream_id, data: stream::RangeBuf { data: data.data.clone(), start: data.start, pos: data.pos, len: data.len, off: changed_off as u64 ,fin: data.fin } }
                     }
                     4 => {
@@ -622,11 +652,11 @@ where
                 let change_type = state.rand_mut().below(3);
                 match change_type {
                     0 => {
-                        let changed_offset = state.rand_mut().between(offset as usize >> 2, (offset << 2).try_into().unwrap());
+                        let changed_offset = state.rand_mut().between(offset as usize >> 1, (offset << 1).try_into().unwrap()) & 0x3FFFFFFFFFFFFFFF;
                         frame::Frame::StreamHeader { stream_id, offset: changed_offset as u64, length, fin }
                     }
                     1 => {
-                        let changed_length = state.rand_mut().between(length as usize >> 2, (length << 2).try_into().unwrap());
+                        let changed_length = state.rand_mut().between(length as usize >> 1, (length << 1).try_into().unwrap()) & 0x3FFFFFFFFFFFFFFF;
                         frame::Frame::StreamHeader { stream_id, offset, length: changed_length, fin }
                     }
                     2 => {
@@ -638,53 +668,53 @@ where
                 
             },
             frame::Frame::MaxData { max } => {
-                let changed_max = state.rand_mut().between(max as usize >> 2, (max << 2).try_into().unwrap());
+                let changed_max = state.rand_mut().between(max as usize >> 1, (max << 1).try_into().unwrap()) & 0x3FFFFFFFFFFFFFFF;
                 frame::Frame::MaxData { max: changed_max as u64 }
             },
             frame::Frame::MaxStreamData { stream_id, max } => {
-                let changed_max = state.rand_mut().between(max as usize >> 2, (max << 2).try_into().unwrap());
+                let changed_max = state.rand_mut().between(max as usize >> 1, (max << 1).try_into().unwrap()) & 0x3FFFFFFFFFFFFFFF;
                 frame::Frame::MaxStreamData { stream_id, max: changed_max as u64 }
             },
             frame::Frame::MaxStreamsBidi { max } => {
-                let changed_max = state.rand_mut().between(max as usize >> 2, (max << 2).try_into().unwrap());
+                let changed_max = state.rand_mut().between(max as usize >> 1, (max << 1).try_into().unwrap()) & 0x3FFFFFFFFFFFFFFF;
                 frame::Frame::MaxStreamsBidi { max: changed_max as u64 }
             },
             frame::Frame::MaxStreamsUni { max } => {
-                let changed_max = state.rand_mut().between(max as usize >> 2, (max << 2).try_into().unwrap());
+                let changed_max = state.rand_mut().between(max as usize >> 1, (max << 1).try_into().unwrap()) & 0x3FFFFFFFFFFFFFFF;
                 frame::Frame::MaxStreamsUni { max: changed_max as u64 }
             },
             frame::Frame::DataBlocked { limit } => {
-                let changed_limit = state.rand_mut().between(limit as usize >> 2, (limit << 2).try_into().unwrap());
+                let changed_limit = state.rand_mut().between(limit as usize >> 1, (limit << 1).try_into().unwrap()) & 0x3FFFFFFFFFFFFFFF;
                 frame::Frame::DataBlocked { limit: changed_limit as u64 }
             },
             frame::Frame::StreamDataBlocked { stream_id, limit } => {
-                let changed_limit = state.rand_mut().between(limit as usize >> 2, (limit << 2).try_into().unwrap());
+                let changed_limit = state.rand_mut().between(limit as usize >> 1, (limit << 1).try_into().unwrap()) & 0x3FFFFFFFFFFFFFFF;
                 frame::Frame::StreamDataBlocked { stream_id, limit: changed_limit as u64 }
             },
             frame::Frame::StreamsBlockedBidi { limit } => {
-                let changed_limit = state.rand_mut().between(limit as usize >> 2, (limit << 2).try_into().unwrap());
+                let changed_limit = state.rand_mut().between(limit as usize >> 1, (limit << 1).try_into().unwrap()) & 0x3FFFFFFFFFFFFFFF;
                 frame::Frame::StreamsBlockedBidi { limit: changed_limit as u64 }
             },
             frame::Frame::StreamsBlockedUni { limit } => {
-                let changed_limit = state.rand_mut().between(limit as usize >> 2, (limit << 2).try_into().unwrap());
+                let changed_limit = state.rand_mut().between(limit as usize >> 1, (limit << 1).try_into().unwrap()) & 0x3FFFFFFFFFFFFFFF;
                 frame::Frame::StreamsBlockedUni { limit: changed_limit as u64 }
             },
             frame::Frame::NewConnectionId { seq_num, retire_prior_to, conn_id, reset_token } => {
                 let changed_type = state.rand_mut().below(2);
                 match changed_type {
                     0 => {
-                        let changed_seq_num = state.rand_mut().between(seq_num as usize >> 2, (seq_num << 2).try_into().unwrap());
+                        let changed_seq_num = state.rand_mut().between(seq_num as usize >> 1, (seq_num << 1).try_into().unwrap()) & 0x3FFFFFFFFFFFFFFF;
                         frame::Frame::NewConnectionId { seq_num: changed_seq_num as u64, retire_prior_to, conn_id, reset_token }
                     }
                     1 => {
-                        let changed_retire_prior_to = state.rand_mut().between(retire_prior_to as usize >> 2, (retire_prior_to << 2).try_into().unwrap());
+                        let changed_retire_prior_to = state.rand_mut().between(retire_prior_to as usize >> 1, (retire_prior_to << 1).try_into().unwrap()) & 0x3FFFFFFFFFFFFFFF;
                         frame::Frame::NewConnectionId { seq_num, retire_prior_to: changed_retire_prior_to as u64, conn_id, reset_token }
                     }
                     _ => unreachable!(),
                 }
             },
             frame::Frame::RetireConnectionId { seq_num } => {
-                let changed_seq_num = state.rand_mut().between(seq_num as usize >> 2, (seq_num << 2).try_into().unwrap());
+                let changed_seq_num = state.rand_mut().between(seq_num as usize >> 1, (seq_num << 1).try_into().unwrap()) & 0x3FFFFFFFFFFFFFFF;
                 frame::Frame::RetireConnectionId { seq_num: changed_seq_num as u64 }
             },
             frame::Frame::PathChallenge { data } => {
@@ -697,11 +727,11 @@ where
                 let change_type = state.rand_mut().below(2);
                 match change_type {
                     0 => {
-                        let changed_error_code = state.rand_mut().between(error_code as usize >> 2, (error_code << 2).try_into().unwrap());
+                        let changed_error_code = state.rand_mut().between(error_code as usize >> 1, (error_code << 1).try_into().unwrap()) & 0x3FFFFFFFFFFFFFFF;
                         frame::Frame::ConnectionClose { error_code: changed_error_code as u64, frame_type, reason }
                     }
                     1 => {
-                        let changed_frame_type = state.rand_mut().between(frame_type as usize >> 2, (frame_type << 2).try_into().unwrap());
+                        let changed_frame_type = state.rand_mut().between(frame_type as usize >> 1, (frame_type << 1).try_into().unwrap()) & 0x3FFFFFFFFFFFFFFF;
                         frame::Frame::ConnectionClose { error_code, frame_type: changed_frame_type as u64, reason }
                     }
                     _ => unreachable!(),
@@ -709,7 +739,7 @@ where
                 }
             },
             frame::Frame::ApplicationClose { error_code, reason } => {
-                let changed_error_code = state.rand_mut().between(error_code as usize >> 2, (error_code << 2).try_into().unwrap());
+                let changed_error_code = state.rand_mut().between(error_code as usize >> 1, (error_code << 1).try_into().unwrap()) & 0x3FFFFFFFFFFFFFFF;
                 frame::Frame::ApplicationClose { error_code: changed_error_code as u64, reason }
             },
             frame::Frame::HandshakeDone => {
@@ -719,7 +749,7 @@ where
                 frame::Frame::Datagram { data }
             },
             frame::Frame::DatagramHeader { length } => {
-                let changed_length = state.rand_mut().between(length as usize >> 2, (length << 2).try_into().unwrap());
+                let changed_length = state.rand_mut().between(length as usize >> 1, (length << 1).try_into().unwrap());
                 frame::Frame::DatagramHeader { length: changed_length }
             },
             frame::Frame::Others { data } => {
@@ -768,7 +798,15 @@ where
         let selected_cycle = state.rand_mut().below(frames_cycle_len);
         let frames_len = quic_corp.frames_cycle[selected_cycle].basic_frames.len();
         debug!("frames_len: {:?}",frames_len);
+        if frames_len == 0 {
+            quic_corp.frames_cycle.remove(selected_cycle);
+            return Ok(MutationResult::Skipped);
+        }
         let selected_frame = state.rand_mut().below(frames_len);
+        if frames_cycle_len == 0 || frames_len == 0 {
+            error!("frames_cycle_len:{:?},frames_len:{:?}",frames_cycle_len,frames_len);
+            return Ok(MutationResult::Skipped);
+        }
         let frame = match quic_corp.frames_cycle[selected_cycle].basic_frames[selected_frame].clone() {
             frame::Frame::Padding { len } => {
                 frame::Frame::Padding { len }
@@ -787,7 +825,7 @@ where
             },
             frame::Frame::Crypto { data } => {
                 let mut data_data_len = data.data.len();
-                let changed_data_data_len = state.rand_mut().between(data_data_len >> 2, min(data_data_len << 2,1500));
+                let changed_data_data_len = state.rand_mut().between(data_data_len >> 1, min(data_data_len << 1,1500));
                 let mut data_data = vec![0u8; changed_data_data_len];
                 for i in 0..min(data_data_len, changed_data_data_len) {
                     data_data[i] = data.data[i];
@@ -799,7 +837,7 @@ where
             },
             frame::Frame::NewToken { token } => {
                 let token_len = token.len();
-                let changed_token_len = state.rand_mut().between(token_len >> 2, min(token_len << 2,1500));
+                let changed_token_len = state.rand_mut().between(token_len >> 1, min(token_len << 1,1500));
                 let mut token_data = vec![0u8; changed_token_len];
                 for i in 0..min(token_len, changed_token_len){
                     token_data[i] = token[i];
@@ -808,7 +846,7 @@ where
             },
             frame::Frame::Stream { stream_id, data } => {
                 let mut data_data_len = data.data.len();
-                let changed_data_data_len = state.rand_mut().between(data_data_len >> 2, min(data_data_len << 2,1500));
+                let changed_data_data_len = state.rand_mut().between(data_data_len >> 1, min(data_data_len << 1,1500));
                 let mut data_data = vec![0u8; changed_data_data_len];
                 for i in 0..min(changed_data_data_len,data_data_len) {
                     data_data[i] = data.data[i];
@@ -855,7 +893,7 @@ where
                 frame::Frame::PathResponse { data }
             },
             frame::Frame::ConnectionClose { error_code, frame_type, reason } => {
-                let changed_reason_len = state.rand_mut().between(reason.len() >> 2, min(reason.len() << 2,1500));
+                let changed_reason_len = state.rand_mut().between(reason.len() >> 1, min(reason.len() << 1,100000));
                 let mut reason_data = vec![0u8; changed_reason_len];
                 for i in 0..min(reason.len(), changed_reason_len) {
                     reason_data[i] = reason[i];
@@ -863,7 +901,7 @@ where
                 frame::Frame::ConnectionClose { error_code, frame_type, reason: reason_data }
             },
             frame::Frame::ApplicationClose { error_code, reason } => {
-                let changed_reason_len = state.rand_mut().between(reason.len() >> 2, min(reason.len() << 2,1500));
+                let changed_reason_len = state.rand_mut().between(reason.len() >> 1, min(reason.len() << 1,100000));
                 let mut reason_data = vec![0u8; changed_reason_len];
                 for i in 0..min(reason.len(), changed_reason_len) {
                     reason_data[i] = reason[i];
@@ -874,7 +912,7 @@ where
                 frame::Frame::HandshakeDone
             },
             frame::Frame::Datagram { data } => {
-                let changed_data_len = state.rand_mut().between(data.len() >> 2, min(data.len() << 2,1500));
+                let changed_data_len = state.rand_mut().between(data.len() >> 1, min(data.len() << 1,100000));
                 let mut data_data = vec![0u8; changed_data_len];
                 for i in 0..min(data.len(),changed_data_len) {
                     data_data[i] = data[i];
@@ -930,7 +968,15 @@ where
         let frames_cycle_len = quic_corp.frames_cycle.len();
         let selected_cycle = state.rand_mut().below(frames_cycle_len);
         let frames_len = quic_corp.frames_cycle[selected_cycle].basic_frames.len();
+        if frames_len == 0 {
+            quic_corp.frames_cycle.remove(selected_cycle);
+            return Ok(MutationResult::Skipped);
+        }
         let selected_frame = state.rand_mut().below(frames_len);
+        if frames_cycle_len == 0 || frames_len == 0 {
+            error!("frames_cycle_len:{:?},frames_len:{:?}",frames_cycle_len,frames_len);
+            return Ok(MutationResult::Skipped);
+        }
         let frame = match quic_corp.frames_cycle[selected_cycle].basic_frames[selected_frame].clone() {
             frame::Frame::Padding { len } => {
                 frame::Frame::Padding { len }
@@ -1089,63 +1135,3 @@ where
 
 }
 
-
-// pub struct MessageNodeTokenReplaceMutator;
-
-// impl MessageNodeTokenReplaceMutator {
-//     pub fn new() -> Self {
-//         Self
-//     }
-// }
-
-// impl Named for MessageNodeTokenReplaceMutator {
-//     fn name(&self) -> &Cow<'static, str> {
-//         static NAME: Cow<'static, str> = Cow::Borrowed("HTTPMessageNodeTokenReplaceMutator");
-//         &NAME
-//     }
-// }
-
-// impl<I, S> Mutator<I, S> for MessageNodeTokenReplaceMutator
-// where
-//     S: HasRand + HasMetadata,
-//     I: HasMutatorBytes,
-// {
-//     fn mutate(
-//         &mut self,
-//         state: &mut S,
-//         input: &mut I,
-//     ) -> Result<MutationResult, Error> {
-//         let input = random_input_from_sequence!(state.rand_mut(), input.http_sequence_input_mut());
-//         let mut node: &mut _ = unsafe { &mut *input.node };
-
-//         while !node.is_leaf() {
-//             let iter = node.iter_node_mut();
-//             node = state.rand_mut().choose(iter).unwrap();
-//         }
-
-//         let tokens = state.metadata::<TokenMetadata>().unwrap();
-//         let length = match node.node_type.label() {
-//             NodeLabel::String => tokens.string.len(),
-//             NodeLabel::Number => tokens.number.len(),
-//             NodeLabel::Symbol => tokens.number.len(),
-//         };
-
-//         if length == 0 {
-//             return Ok(MutationResult::Skipped);
-//         }
-
-//         let idx = state.rand_mut().below(length);
-//         let tokens = state.metadata::<TokenMetadata>().unwrap();
-
-//         let token = match node.node_type.label() {
-//             NodeLabel::String => &tokens.string[idx],
-//             NodeLabel::Number => &tokens.number[idx],
-//             NodeLabel::Symbol => &tokens.symbol[idx],
-//         };
-
-//         node.value = Vec::from(token.as_bytes());
-//         node.update_metadata_up(0);
-
-//         Ok(MutationResult::Mutated)
-//     }
-// }

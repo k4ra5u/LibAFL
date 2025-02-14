@@ -1,0 +1,1 @@
+nohup taskset -c 52,53 /home/john/Desktop/cjj_related/quic-fuzz/newest/quic/dist-newstyle/build/x86_64-linux/ghc-9.4.7/quic-0.2.7/x/quic-server/build/quic-server/quic-server -c /home/john/Desktop/cjj_related/server.crt -k /home/john/Desktop/cjj_related/server.key 0.0.0.0 58440 >> haskell-quic.txt 2>&1 &

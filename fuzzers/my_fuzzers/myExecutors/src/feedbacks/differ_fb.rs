@@ -1,5 +1,6 @@
 use core::error;
 use std::borrow::Cow;
+use std::io::Write;
 use std::mem;
 use std::process::Command;
 
@@ -104,11 +105,13 @@ pub struct DifferFeedback {
     diff_ctrl_ob_handle: Handle<DifferentialRecvControlFrameObserver>,
     diff_data_ob_handle: Handle<DifferentialRecvDataFrameObserver>,
     diff_ack_ob_handle: Handle<DifferentialACKRangeObserver>,
-    misc_ob_handle: Handle<DifferentialMiscObserver>,
+    diff_pcap_ob_handle: Handle<DifferentialPcapObserver>,
+    diff_misc_ob_handle: Handle<DifferentialMiscObserver>,
     history_object:Vec<Deduplication>,
     pub srand_seed: u32,
-    pub first_pcap_path: String,
-    pub second_pcap_path: String,
+    pub first_pcap: PcapRecord,
+    pub second_pcap: PcapRecord,
+
 }
 
 impl<S> Feedback<S> for DifferFeedback
@@ -128,10 +131,8 @@ where
         EM: EventFirer<State = S>,
         OT: ObserversTuple<S>,
     {
-        let misc_ob = _observers.get(&self.misc_ob_handle).unwrap();
-        self.srand_seed = misc_ob.srand_seed;
-        self.first_pcap_path = misc_ob.first_pcap_name.clone();
-        self.second_pcap_path = misc_ob.second_pcap_name.clone();
+        let diff_misc_ob = _observers.get(&self.diff_misc_ob_handle).unwrap();
+        self.srand_seed = diff_misc_ob.srand_seed;
         
         // let observer = _observers.get(&self.observer_handle).unwrap();
         let diff_cc_ob = _observers.get(&self.diff_cc_ob_handle).unwrap();
@@ -140,6 +141,9 @@ where
         let diff_ctrl_ob = _observers.get(&self.diff_ctrl_ob_handle).unwrap();
         let diff_data_ob = _observers.get(&self.diff_data_ob_handle).unwrap();
         let diff_ack_ob = _observers.get(&self.diff_ack_ob_handle).unwrap();
+        let diff_pcap_ob = _observers.get(&self.diff_pcap_ob_handle).unwrap();
+        self.first_pcap = diff_pcap_ob.first_pcap_record.clone();
+        self.second_pcap = diff_pcap_ob.second_pcap_record.clone();
 
         let mut interesting_flag = false;
         let diff_cc_ob_judge_type = diff_cc_ob.judge_type();
@@ -167,8 +171,10 @@ where
             warn!("vul of ACK Range testcase: {:?}",diff_ack_ob.judge_type());
             interesting_flag = true;
         }
+        let mut crash_flag = false;
         if _exit_kind != &ExitKind::Ok {
             error!("vul of ExitKind testcase: {:?}",_exit_kind);
+            crash_flag = true;
             interesting_flag = true;
         }
         if interesting_flag {
@@ -186,7 +192,7 @@ where
                 if old_object == &new_deduplication {
                     if old_object.match_nums > 0 {
                         warn!("Deduplication testcase");
-                        if new_deduplication.exit_kind == ExitKind::Crash {
+                        if crash_flag == true {
                             warn!("Crash testcase");
                             return Ok(true);
                         }
@@ -224,6 +230,18 @@ where
         *testcase.file_path_mut()  = Some(std::path::PathBuf::from(new_Path.clone()));
         info!("Stored input to disk:: {:?}",new_Path);
         // ./path/to/crashes/0fac37e6127023ae -> ./path/to/crashes/
+        let first_commend = format!("editcap -A {} -B {} record.pcap {}\n",self.first_pcap.start_time,self.first_pcap.end_time,self.first_pcap.name);
+        let second_commend = format!("editcap -A {} -B {} record.pcap {}\n",self.second_pcap.start_time,self.second_pcap.end_time,self.second_pcap.name);
+
+        // write into dump_records.sh
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .append(true)
+            .create(true)
+            .open("dump_records.sh")
+            .unwrap();
+        file.write_all(first_commend.as_bytes()).unwrap();
+        file.write_all(second_commend.as_bytes()).unwrap();
         Ok(())
     }
 
@@ -231,21 +249,21 @@ where
     #[inline]
     fn discard_metadata(&mut self, _state: &mut S, _input: &S::Input) -> Result<(), Error> {
         
-        let _ = Command::new("sudo")
-        .arg("rm")
-        .arg("-f")
-        .arg(&self.first_pcap_path)
-        .output() // 捕获 `touch` 的输出
-        .expect("Failed to create empty pcap file");
-        let _ = Command::new("sudo")
-        .arg("rm")
-        .arg("-f")
-        .arg(&self.second_pcap_path)
-        .output() // 捕获 `touch` 的输出
-        .expect("Failed to create empty pcap file");
+        // let _ = Command::new("sudo")
+        // .arg("rm")
+        // .arg("-f")
+        // .arg(&self.first_pcap_path)
+        // .output() // 捕获 `touch` 的输出
+        // .expect("Failed to create empty pcap file");
+        // let _ = Command::new("sudo")
+        // .arg("rm")
+        // .arg("-f")
+        // .arg(&self.second_pcap_path)
+        // .output() // 捕获 `touch` 的输出
+        // .expect("Failed to create empty pcap file");
 
-        info!("delete pcap file: {:?}",&self.first_pcap_path);
-        info!("delete pcap file: {:?}",&self.second_pcap_path);
+        // info!("delete pcap file: {:?}",&self.first_pcap_path);
+        // info!("delete pcap file: {:?}",&self.second_pcap_path);
         Ok(())
     }
 
@@ -273,7 +291,8 @@ impl DifferFeedback {
                 diff_ctrl_ob: &DifferentialRecvControlFrameObserver,
                 diff_data_ob: &DifferentialRecvDataFrameObserver,
                 diff_ack_ob: &DifferentialACKRangeObserver,
-                misc_ob: &DifferentialMiscObserver,
+                diff_pcap_ob: &DifferentialPcapObserver,
+                diff_misc_ob: &DifferentialMiscObserver,
     ) -> Self {
         Self {
             diff_cc_ob_handle: diff_cc_ob.handle(),
@@ -282,11 +301,12 @@ impl DifferFeedback {
             diff_ctrl_ob_handle: diff_ctrl_ob.handle(),
             diff_data_ob_handle: diff_data_ob.handle(),
             diff_ack_ob_handle: diff_ack_ob.handle(),
-            misc_ob_handle: misc_ob.handle(),
+            diff_pcap_ob_handle: diff_pcap_ob.handle(),
+            diff_misc_ob_handle: diff_misc_ob.handle(),
             srand_seed: 0,
-            first_pcap_path: String::new(),
-            second_pcap_path: String::new(),
             history_object: Vec::new(),
+            first_pcap: PcapRecord::new(),
+            second_pcap: PcapRecord::new(),
         }
     }
 }

@@ -738,6 +738,7 @@ where
         loop {
             match self.next_file() {
                 Ok(path) => {
+                    // for i in  0..1000 {
                     let res = self.load_file(&path, manager, fuzzer, executor, &mut config)?;
                     if config.exit_on_solution && matches!(res, ExecuteInputResult::Solution) {
                         return Err(Error::invalid_corpus(format!(
@@ -745,6 +746,7 @@ where
                             path.display()
                         )));
                     }
+                    // }
                 }
                 Err(Error::IteratorEnd(_, _)) => break,
                 Err(e) => return Err(e),

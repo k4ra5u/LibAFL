@@ -28,7 +28,6 @@ use libafl_bolts::tuples::MatchNameRef;
 #[derive( Serialize, Deserialize,Debug, Clone)]
 pub struct MiscObserver {
     pub name: Cow<'static, str>,
-    pub pcap_path: String,
     pub srand_seed: u32,
 }
 
@@ -38,7 +37,6 @@ impl MiscObserver {
     pub fn new(name: &'static str) -> Self {
         Self {
             name: Cow::from(name),
-            pcap_path: String::new(),
             srand_seed: 0,
         }
     }
@@ -84,8 +82,6 @@ pub struct DifferentialMiscObserver {
     second_ob_ref: Handle<MiscObserver>,
     name: Cow<'static, str>,
     pub srand_seed: u32,
-    pub first_pcap_name: String,
-    pub second_pcap_name: String,
 }
 
 impl DifferentialMiscObserver {
@@ -103,8 +99,6 @@ impl DifferentialMiscObserver {
             second_observer: MiscObserver::new("fake"),
             second_ob_ref: second.handle(),
             srand_seed: 0,
-            first_pcap_name: String::new(),
-            second_pcap_name: String::new(),
 
         }
     }
@@ -119,8 +113,6 @@ impl DifferentialMiscObserver {
 
     pub fn perform_judge (&mut self) {
         self.srand_seed = self.first_observer.srand_seed;
-        self.first_pcap_name = self.first_observer.pcap_path.clone();
-        self.second_pcap_name = self.second_observer.pcap_path.clone();
         info!("Fir:{:?}", self.first_observer);
         info!("Sec:{:?}", self.second_observer);
         self.first_observer = MiscObserver::new("fake");

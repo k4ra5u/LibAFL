@@ -1,0 +1,1 @@
+nohup taskset -c 52,53 /home/john/Desktop/cjj_related/quic-fuzz/newest/picoquic/build/picoquicdemo -c /home/john/Desktop/cjj_related/server.crt -k /home/john/Desktop/cjj_related/server.key -p 58440 >> picoquic.txt 2>&1 & 

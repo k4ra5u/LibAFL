@@ -4,6 +4,7 @@
 //! which only stores a certain number of [`Testcase`]s and removes additional ones in a FIFO manner.
 
 use alloc::string::String;
+use log::info;
 use core::cell::RefCell;
 #[cfg(feature = "std")]
 use std::{fs, fs::File, io::Write};
@@ -197,7 +198,7 @@ where
             ));
         };
         /* PATCH */
-        // info!("Storing input to disk: {:?}", file_path);
+        info!("Storing input to disk: {:?}", file_path);
         input.to_file(file_path)
     }
 }

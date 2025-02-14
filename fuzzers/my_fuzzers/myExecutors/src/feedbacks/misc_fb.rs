@@ -1,4 +1,7 @@
 use std::borrow::Cow;
+use std::io::Write;
+use std::sync::{Arc, Mutex};
+
 use std::process::Command;
 
 use libafl::corpus::Testcase;
@@ -19,16 +22,18 @@ use libafl::{executors::ExitKind, inputs::UsesInput,observers::Observer, state::
 use quiche::{frame, packet, Connection, ConnectionId, Header};
 use crate::inputstruct::*;
 use crate::observers::*;
+use crate::observers::PcapRecord;
+use ctrlc;
 
 /// Nop feedback that annotates execution time in the new testcase, if any
 /// for this Feedback, the testcase is never interesting (use with an OR).
 /// It decides, if the given [`MiscObserver`] value of a run is interesting.
-#[derive(Serialize, Deserialize, Clone, Debug)]
+
+
+#[derive(Serialize, Deserialize, Debug)]
 pub struct MiscFeedback {
     observer_handle: Handle<MiscObserver>,
-    pcap_path: String,
     srand_seed:u32,
-
 }
 
 impl<S> Feedback<S> for MiscFeedback
@@ -50,7 +55,6 @@ where
     {
         let observer = _observers.get(&self.observer_handle).unwrap();
         self.srand_seed = observer.srand_seed;
-        self.pcap_path = observer.pcap_path.clone();
         Ok(false)
     }
 
@@ -67,25 +71,21 @@ where
         OT: ObserversTuple<S>,
         EM: EventFirer<State = S>,
     {
-        let new_Path = format!("./crashes/seed_{:?}",self.srand_seed);
-        *testcase.file_path_mut()  = Some(std::path::PathBuf::from(new_Path.clone()));
-        info!("new path: {:?}",new_Path);
-        // ./path/to/crashes/0fac37e6127023ae -> ./path/to/crashes/
-        
+
         Ok(())
     }
 
     /// Discard the stored metadata in case that the testcase is not added to the corpus
     #[inline]
     fn discard_metadata(&mut self, _state: &mut S, _input: &S::Input) -> Result<(), Error> {
-        let _ = Command::new("sudo")
-        .arg("rm")
-        .arg("-f")
-        .arg(&self.pcap_path)
-        .output() // 捕获 `touch` 的输出
-        .expect("Failed to create empty pcap file");
+        // let _ = Command::new("sudo")
+        // .arg("rm")
+        // .arg("-f")
+        // .arg(&self.pcap_path)
+        // .output() // 捕获 `touch` 的输出
+        // .expect("Failed to create empty pcap file");
 
-        info!("delete pcap file: {:?}",&self.pcap_path);
+        // info!("delete pcap file: {:?}",&self.pcap_path);
         Ok(())
     }
 
@@ -105,12 +105,13 @@ impl Named for MiscFeedback {
 impl MiscFeedback {
     /// Creates a new [`MiscFeedback`], deciding if the given [`MiscObserver`] value of a run is interesting.
     #[must_use]
-    pub fn new(observer: &MiscObserver) -> Self {
-        Self {
+    pub fn new(observer: &MiscObserver) -> Self  {
+        let instance = Self {
             observer_handle: observer.handle(),
-            pcap_path: String::new(),
             srand_seed: 0,
-        }
+        };
+        instance
     }
+
 }
 

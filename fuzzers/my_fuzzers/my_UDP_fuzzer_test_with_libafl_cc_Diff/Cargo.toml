@@ -32,6 +32,7 @@ env_logger = "0.11"
 mylibafl = { path = "../myExecutors/" }
 rand = "0.9.0-alpha.0"
 ring = "0.17"
+ctrlc = "3.1.0"
 
 [lib]
 name = "my_UDP_fuzzer_test_with_libafl_cc_Diff"

@@ -1,0 +1,1 @@
+nohup taskset -c 52,53 python /home/john/Desktop/cjj_related/quic-fuzz/sources/aioquic/examples/http3_server.py --certificate /home/john/Desktop/cjj_related/quic-fuzz/sources/aioquic/tests/ssl_cert.pem --private-key /home/john/Desktop/cjj_related/quic-fuzz/sources/aioquic/tests/ssl_key.pem --port 58440 >> aioquic.txt  2>&1 & 

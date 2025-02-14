@@ -1,0 +1,1 @@
+nohup taskset -c 52,53 /home/john/Desktop/cjj_related/quic-fuzz/newest/cf-quiche/target/debug/quiche-server --listen 127.0.0.1:58440 --cert /home/john/Desktop/cjj_related/quic-fuzz/newest/cf-quiche/apps/src/bin/cert.crt --key /home/john/Desktop/cjj_related/quic-fuzz/newest/cf-quiche/apps/src/bin/cert.key >> cf-quiche.txt 2>&1 & 

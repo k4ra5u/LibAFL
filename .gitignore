@@ -76,6 +76,7 @@ libafl_nyx/packer
 harness
 program
 fuzzer
+history
 fuzzer_libpng*
 fuzzers/my_fuzzers/gen_testcase/corpus/*
 fuzzers/my_fuzzers/check_corpus/corpus/*
@@ -85,6 +86,8 @@ fuzzers/my_fuzzers/check_corpus/pcaps/*
 fuzzers/my_fuzzers/my_UDP_fuzzer_test_with_libafl_cc_Diff/corpus/*
 fuzzers/my_fuzzers/my_UDP_fuzzer_test_with_libafl_cc_Diff/crashes/*
 fuzzers/my_fuzzers/my_UDP_fuzzer_test_with_libafl_cc_Diff/pcaps/*
-
+fuzzers/my_fuzzers/my_UDP_fuzzer_test_with_libafl_cc_Diff/dump_records.sh
+fuzzers/my_fuzzers/my_UDP_fuzzer_test_with_libafl_cc_Diff/record.pcap
+*.txt
 
 
