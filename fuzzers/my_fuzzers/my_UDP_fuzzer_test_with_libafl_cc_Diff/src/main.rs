@@ -6,6 +6,7 @@ use std::{
         unix::{io::RawFd, process::CommandExt},
     }, path::Path, process::{Child, Command, Output, Stdio}, str, thread::sleep, vec
 };
+use libafl::prelude::MapObserver;
 use nix::sys::signal::sigprocmask;
 use nix::{
     sys::{
@@ -48,36 +49,33 @@ use ctrlc;
 struct Opt {
 
     #[arg(
-        help = "The directory to read initial inputs from ('seeds')",
-        name = "INPUT_DIR",
-        default_value = "/home/john/Desktop/cjj_related/testing_new/fuzzing-test/LibAFL/fuzzers/my_fuzzers/my_UDP_fuzzer_test_with_libafl_cc_Diff/corpus/"
+        help = "first harness name",
+        name = "first_name",
+        default_value = "lsquic"
 
     )]
-    in_dir: PathBuf,
-
-    #[arg(
-        help = "Timeout for each individual execution, in milliseconds",
-        short = 't',
-        long = "timeout",
-        default_value = "1200"
-    )]
-    timeout: u64,
+    first_name: String,
 
     #[arg(
-        help = "If not set, the child's stdout and stderror will be redirected to /dev/null",
-        short = 'd',
-        long = "debug-child",
-        default_value = "false"
+        help = "first conn port",
+        name = "first_port",
+        default_value = "58443"
     )]
-    debug_child: bool,
+    first_port: u16,
 
     #[arg(
-        help = "Arguments passed to the target",
-        name = "arguments",
-        num_args(1..),
-        allow_hyphen_values = true,
+        help = "second harness name",
+        name = "second_name",
+        default_value = "h2o"
     )]
-    arguments: Vec<String>,
+    second_name: String,
+
+    #[arg(
+        help = "second conn port",
+        name = "second_port",
+        default_value = "58440"
+    )]
+    second_port: u16,
 
     #[arg(
         help = "Signal used to stop child",
@@ -117,42 +115,105 @@ fn stop_capture(mut child: std::process::Child) {
 
 fn register_signal_handler() -> Result<(), Box<dyn std::error::Error>> {
     //when user input ctrl_c or process crashed or kill the process, we should stop the capture process
-    ctrlc::set_handler(move || {
-        Command::new("sudo")
-        .arg("killall")
-        .arg("tshark")
-        .stdout(Stdio::piped()) // 捕获输出
-        .stderr(Stdio::piped()) // 捕获错误
-        .spawn()
-        .expect("Failed to start capture process");
-    }).expect("Error setting Ctrl-C handler");
+    // ctrlc::set_handler(move || {
+    //     Command::new("sudo")
+    //     .arg("killall")
+    //     .arg("tshark")
+    //     .stdout(Stdio::piped()) // 捕获输出
+    //     .stderr(Stdio::piped()) // 捕获错误
+    //     .spawn()
+    //     .expect("Failed to start capture process");
+    // }).expect("Error setting Ctrl-C handler");
     Ok(())
 }
 
+fn start_harness(name: &str, shmem_id: String) -> std::process::Child {
+    std::env::set_var("__AFL_SHM_ID", shmem_id);
+    std::env::set_var("__AFL_SHM_ID_SIZE", MAP_SIZE.to_string());
+    let base_dir = env::var("START_DIR").unwrap();
+    let start_command = format!("{base_dir}/{name}.sh");
+    let mut child = std::process::Command::new("sh").arg("-c").arg(&start_command)
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .spawn()
+    .expect("Failed to start harness");
+    child
+}
+
+fn start_quic_converter(port: &str, shmem_id: String) -> std::process::Child {
+    std::env::set_var("QUIC_STRUCT", shmem_id);
+    let base_dir = env::var("START_DIR").unwrap();
+    let start_command = format!("{base_dir}/quic_converter");
+    let mut child = std::process::Command::new(&start_command)
+    .arg("127.0.0.1")
+    .arg(port)
+    .arg("--transport")
+    .arg("shm")
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .spawn()
+    .expect("Failed to start quic converter");
+    child
+}
+
 #[allow(clippy::similar_names)]
-static mut SHMEM_EDGE_MAP: Option<UnixShMem> = None;
+const QUIC_SIZE: usize = 0x8000000;//128MB
+const OB_RESPONSE_SIZE: usize = 0x1000000;//16MB
+const MAP_SIZE: usize = 65536; 
+static mut SHMEM_EDGE_MAP_FIRST: Option<UnixShMem> = None;
+static mut SHMEM_EDGE_MAP_SECOND: Option<UnixShMem> = None;
+static mut SHMEM_QUIC_STRUCT_FIRST: Option<UnixShMem> = None;
+static mut SHMEM_QUIC_STRUCT_SECOND: Option<UnixShMem> = None;
+static mut SHMEM_OB_RESPONSE_FIRST: Option<UnixShMem> = None;
+static mut SHMEM_OB_RESPONSE_SECOND: Option<UnixShMem> = None;
 
 pub fn main() {
     std::env::set_var("RUST_LOG", "info");
-    std::env::set_var("START_DIR", "/home/john/Desktop/cjj_related/testing_new/fuzzing-test/LibAFL/fuzzers/my_fuzzers/start");
-    std::env::set_var("JUDGE_DIR", "/home/john/Desktop/cjj_related/testing_new/fuzzing-test/LibAFL/fuzzers/my_fuzzers/judge");
+    std::env::set_var("START_DIR", "/home/john/quic-fuzz/LibAFL/fuzzers/my_fuzzers/start");
+    std::env::set_var("JUDGE_DIR", "/home/john/quic-fuzz/LibAFL/fuzzers/my_fuzzers/judge");
     std::env::set_var("SSLKEYLOGFILE", "/media/john/Data/key.log");
     std::env::set_var("PCAPS_DIR", "pcaps");
     env_logger::init();
-    const MAP_SIZE: usize = 65536;
-    let mut capture_process = start_capture();
+    let opt = Opt::parse();
+    // const MAP_SIZE: usize = 65536;
+
+    let mut shmem_provider = StdShMemProvider::new().unwrap();
+
+    unsafe {
+        SHMEM_QUIC_STRUCT_FIRST = Some(shmem_provider.new_shmem(QUIC_SIZE).unwrap());
+        SHMEM_QUIC_STRUCT_SECOND = Some(shmem_provider.new_shmem(QUIC_SIZE).unwrap());
+        SHMEM_OB_RESPONSE_FIRST = Some(shmem_provider.new_shmem(OB_RESPONSE_SIZE).unwrap());
+        SHMEM_OB_RESPONSE_SECOND = Some(shmem_provider.new_shmem(OB_RESPONSE_SIZE).unwrap());
+        SHMEM_EDGE_MAP_FIRST = Some(shmem_provider.new_shmem(MAP_SIZE).unwrap());
+        SHMEM_EDGE_MAP_SECOND = Some(shmem_provider.new_shmem(MAP_SIZE).unwrap());
+    }
+    
+
+
+
+    let mut diff_map_observer = HitcountsIterableMapObserver::new(
+        MultiMapObserver::new(
+            "combined-edges",
+            vec![
+                unsafe { OwnedMutSlice::from_raw_parts_mut(SHMEM_EDGE_MAP_FIRST.as_mut().unwrap().as_slice_mut().as_mut_ptr(), MAP_SIZE) },
+                unsafe { OwnedMutSlice::from_raw_parts_mut(SHMEM_EDGE_MAP_SECOND.as_mut().unwrap().as_slice_mut().as_mut_ptr(), MAP_SIZE) },
+            ],
+    ));
+    diff_map_observer.base.reset_map(); 
+    // let mut capture_process = start_capture();
+    let mut first_harness = start_harness(&opt.first_name,unsafe {SHMEM_EDGE_MAP_FIRST.as_ref().unwrap().id().to_string()});
+    let mut second_harness = start_harness(&opt.second_name,unsafe {SHMEM_EDGE_MAP_SECOND.as_ref().unwrap().id().to_string()});
+    let mut first_quic_converter = start_quic_converter(&opt.first_port.to_string(),unsafe {SHMEM_QUIC_STRUCT_FIRST.as_ref().unwrap().id().to_string()});
+    let mut second_quic_converter = start_quic_converter(&opt.second_port.to_string(),unsafe {SHMEM_QUIC_STRUCT_SECOND.as_ref().unwrap().id().to_string()});
 
 
     let corpus_dirs: Vec<PathBuf> = vec![PathBuf::from("/home/john/Desktop/cjj_related/testing_new/fuzzing-test/LibAFL/fuzzers/my_fuzzers/my_UDP_fuzzer_test_with_libafl_cc_Diff/corpus-nor/")];
 
-    let mut shmem_provider = UnixShMemProvider::new().unwrap();
-    unsafe{
-        SHMEM_EDGE_MAP = Some(shmem_provider.new_shmem(65536).unwrap());
-    }
+
 
     let first_time_observer = TimeObserver::new("time");
     let first_recv_pkt_num_observer = RecvPktNumObserver::new("recv_pkt_num");
-    let mut first_conn_observer = NormalConnObserver::new("conn1","127.0.0.1".to_owned(),58443,"myserver.xx".to_owned());
+    let mut first_conn_observer = NormalConnObserver::new("conn1","127.0.0.1".to_owned(),opt.first_port,"myserver.xx".to_owned());
     let mut first_cc_time_observer = CCTimesObserver::new("cc_time");
     let mut first_cpu_usage_observer = CPUUsageObserver::new("first_cpu_usage");
     let mut first_ctrl_observer = RecvControlFrameObserver::new("ctrl");
@@ -167,7 +228,7 @@ pub fn main() {
 
     let second_time_observer = TimeObserver::new("time");
     let second_recv_pkt_num_observer = RecvPktNumObserver::new("recv_pkt_num");
-    let mut second_conn_observer = NormalConnObserver::new("conn2","127.0.0.1".to_owned(),58443,"myserver.xx".to_owned());
+    let mut second_conn_observer = NormalConnObserver::new("conn2","127.0.0.1".to_owned(),opt.second_port,"myserver.xx".to_owned());
     let mut second_cc_time_observer = CCTimesObserver::new("cc_time");
     let mut second_cpu_usage_observer = CPUUsageObserver::new("second_cpu_usage");
     let mut second_ctrl_observer = RecvControlFrameObserver::new("ctrl");
@@ -183,6 +244,7 @@ pub fn main() {
 
 
     
+
 
 
     let diff_cc_ob = DifferentialCCTimesObserver::new(&mut first_cc_time_observer, &mut second_cc_time_observer);
@@ -207,6 +269,8 @@ pub fn main() {
         // TimeFeedback::new(&time_observer),
         // RecvPktNumFeedback::new(&recv_pkt_num_observer),
         UCBFeedback::new(&first_ucb_observer),
+        MaxMapFeedback::new(&diff_map_observer)
+        
     );    
     let mut objective = feedback_or!(
         CrashFeedback::new(),
@@ -251,7 +315,8 @@ pub fn main() {
         first_ack_observer,
         first_mem_observer,
         first_misc_ob,
-        first_pcap_ob
+        first_pcap_ob,
+        diff_map_observer
         );
 
     let second_observers = tuple_list!(
@@ -277,29 +342,42 @@ pub fn main() {
         diff_mem_ob,
         diff_pcap_ob,
         diff_misc_ob,
+        
     );
 
     let mut rng = rand::thread_rng();
     let frame_rand_seed = rng.gen();
     unsafe { srand(frame_rand_seed) };
     let mut first_executor = NetworkRestartExecutor::new(first_observers,shmem_provider.clone())
-        .start_command("lsquic.sh".to_owned())
-        .judge_command("lsquic-judge.sh".to_owned())
-        .port(58443)
+        .start_command(opt.first_name.to_owned())
+        .judge_command(opt.first_name.to_owned())
+        .port(opt.first_port)
         .timeout(Duration::from_millis(1000))
         .coverage_map_size(MAP_SIZE)
+        .envs(vec![
+            ("__AFL_SHM_ID".to_string(), unsafe { SHMEM_EDGE_MAP_FIRST.as_ref().unwrap().id().to_string() }),
+            ("__AFL_SHM_ID_SIZE".to_string(), MAP_SIZE.to_string()),
+        ])
         .set_frame_seed(frame_rand_seed)
-        .build_quic_struct("myserver.xx".to_owned(),58443, "127.0.0.1".to_owned())
+        .quic_shm_id(unsafe {SHMEM_QUIC_STRUCT_FIRST.as_ref().unwrap().id().to_string()})
+        .quic_shm_size(QUIC_SIZE)
+        // .build_quic_struct("myserver.xx".to_owned(),58443, "127.0.0.1".to_owned())
         .build();
 
     let mut second_executor = NetworkRestartExecutor::new(second_observers,shmem_provider.clone())
-    .start_command("ngtcp2.sh".to_owned())
-    .judge_command("ngtcp2-judge.sh".to_owned())
-    .port(58440)
+    .start_command(opt.second_name.to_owned())
+    .judge_command(opt.second_name.to_owned())
+    .port(opt.second_port)
     .timeout(Duration::from_millis(1000))
     .coverage_map_size(MAP_SIZE)
+    .envs(vec![
+        ("__AFL_SHM_ID".to_string(), unsafe { SHMEM_EDGE_MAP_SECOND.as_ref().unwrap().id().to_string() }),
+        ("__AFL_SHM_ID_SIZE".to_string(), MAP_SIZE.to_string()),
+    ])
     .set_frame_seed(frame_rand_seed)
-    .build_quic_struct("myserver.xx".to_owned(),58440, "127.0.0.1".to_owned())
+    .quic_shm_id(unsafe {SHMEM_QUIC_STRUCT_SECOND.as_ref().unwrap().id().to_string()})
+    .quic_shm_size(QUIC_SIZE)
+    // .build_quic_struct("myserver.xx".to_owned(),58440, "127.0.0.1".to_owned())
     .build();
 
     let mut differential_executor = DiffExecutor::new(

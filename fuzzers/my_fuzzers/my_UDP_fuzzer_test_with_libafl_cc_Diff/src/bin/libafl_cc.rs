@@ -26,12 +26,11 @@ pub fn main() {
             // Enable libafl's coverage instrumentation
             .add_arg("-fsanitize-coverage=trace-pc-guard")
             // Imitate afl-cc's compile definitions 
-            .add_arg("-D__AFL_FUZZ_INIT()=int __afl_sharedmem_fuzzing = 1;extern unsigned int *__afl_fuzz_len;extern unsigned char *__afl_fuzz_ptr;unsigned char __afl_fuzz_alt[1048576];unsigned char *__afl_fuzz_alt_ptr = __afl_fuzz_alt;void libafl_start_forkserver(void)")
-            .add_arg("-D__AFL_FUZZ_TESTCASE_BUF=(__afl_fuzz_ptr ? __afl_fuzz_ptr : __afl_fuzz_alt_ptr)")
-            .add_arg("-D__AFL_FUZZ_TESTCASE_LEN=(__afl_fuzz_ptr ? *__afl_fuzz_len : (*__afl_fuzz_len = read(0, __afl_fuzz_alt_ptr, 1048576)) == 0xffffffff ? 0 : *__afl_fuzz_len)")
+            .add_arg("-D__AFL_FUZZ_INIT()=void libafl_start_forkserver(void)")
+
             .add_arg("-D__AFL_INIT()=libafl_start_forkserver()")
             // Link with libafl's forkserver implementation
-            .link_staticlib(&dir, "my_UDP_fuzzer_test_with_libafl_cc_Diff")
+            .link_staticlib(&dir, "libafl_cc")
             .run()
             .expect("Failed to run the wrapped compiler")
         {

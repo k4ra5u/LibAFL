@@ -35,5 +35,5 @@ ring = "0.17"
 ctrlc = "3.1.0"
 
 [lib]
-name = "my_UDP_fuzzer_test_with_libafl_cc_Diff"
+name = "libafl_cc"
 crate-type = ["staticlib"]

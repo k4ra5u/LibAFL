@@ -5,5 +5,5 @@ pub extern "C" fn libafl_start_forkserver() {
     // Map shared memory region for the edge coverage map
     map_shared_memory();
     // Start the forkserver
-    start_forkserver();
+    // start_forkserver();
 }
