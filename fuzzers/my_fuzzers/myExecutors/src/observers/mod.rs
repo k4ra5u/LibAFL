@@ -6,6 +6,7 @@ pub mod recv_pkt_num;
 pub mod ucb_ob;
 pub mod misc_ob;
 pub mod pcap_record;
+pub mod shmem_io;
 
 pub use recv_pkt_num::*;
 pub use cc_time::*;
@@ -15,3 +16,4 @@ pub use normal_conn::*;
 pub use ucb_ob::*;
 pub use misc_ob::*;
 pub use pcap_record::*;
+pub use shmem_io::*;

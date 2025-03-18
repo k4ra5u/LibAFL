@@ -343,7 +343,7 @@ pub struct HitcountsIterableMapObserver<M>
 where
     M: Serialize,
 {
-    base: M,
+    pub base: M,
 }
 
 impl<S, M> Observer<S> for HitcountsIterableMapObserver<M>

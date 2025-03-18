@@ -246,9 +246,10 @@ pub fn new_token(buf: &mut &[u8],len:usize) -> Result<frame::Frame, Error> {
     if frame_len > len {
         frame_len = len; 
     }
-    let frame = frame::Frame::NewToken {
-        token: buf.to_vec(),
-    };
+    // let frame = frame::Frame::NewToken {
+    //     token: buf.to_vec(),
+    // };
+    let frame = frame::Frame::Padding { len: 10 };
 
     Ok(frame)
 }

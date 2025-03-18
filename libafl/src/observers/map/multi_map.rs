@@ -31,7 +31,7 @@ pub struct MultiMapObserver<'a, T, const DIFFERENTIAL: bool>
 where
     T: 'static + Default + Copy + Serialize + Debug,
 {
-    maps: Vec<OwnedMutSlice<'a, T>>,
+    pub maps: Vec<OwnedMutSlice<'a, T>>,
     intervals: IntervalTree<usize, usize>,
     len: usize,
     initial: T,
@@ -47,7 +47,8 @@ where
 {
     #[inline]
     fn pre_exec(&mut self, _state: &mut S, _input: &S::Input) -> Result<(), Error> {
-        self.reset_map()
+        // self.reset_map()
+        Ok(())
     }
 }
 

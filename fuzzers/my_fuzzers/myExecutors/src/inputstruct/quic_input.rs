@@ -10,6 +10,7 @@ use log::{error, info,debug,warn};
 use std::net::{SocketAddr, ToSocketAddrs};
 // use ring::rand::*;
 use libc::{srand, rand};
+#[derive(Debug)]
 pub struct FramesCycleStruct {
     pub repeat_num: usize,
     pub basic_frames: Vec<frame::Frame>,
@@ -41,11 +42,16 @@ impl FramesCycleStruct {
         let mut basic_frames = Vec::new();
         let mut octets_input = octets::Octets::with_slice(input);
         while left > 0 {
-            let frame = frame::Frame::from_bytes(&mut octets_input, pkt_type).unwrap();
-            left = octets_input.cap();
-            debug!("frame: {:?}", frame);
-            basic_frames.push(frame);
-            
+            match  frame::Frame::from_bytes(&mut octets_input, pkt_type) {
+                Ok(frame) => {
+                    left = octets_input.cap();
+                    // debug!("frame: {:?}", frame);
+                    basic_frames.push(frame);
+                },
+                Err(_) => {
+                    break;
+                },
+            }
         }
         Self {
             repeat_num,
@@ -53,13 +59,14 @@ impl FramesCycleStruct {
         }
     }
 }
-
+#[derive(Debug)]
 pub enum pkt_resort_type {
     None,
     Random,
     Reverse,
     Odd_even,
 }
+#[derive(Debug)]
 pub struct InputStruct {
     pub pkt_type: packet::Type,
     pub send_timeout: u64,
@@ -645,7 +652,9 @@ pub fn InputStruct_deserialize(input: &[u8]) -> InputStruct {
         let cycle_len = cycles_len[i];
         let frame_cycle = FramesCycleStruct::new_with_input(pkt_type, &input[0..cycle_len]);
         input = &input[cycle_len..];
-        frames_cycle.push(frame_cycle);
+        if frame_cycle.basic_frames.len() !=0 {
+            frames_cycle.push(frame_cycle);
+        }
     }
 
     InputStruct {

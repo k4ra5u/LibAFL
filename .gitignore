@@ -89,5 +89,5 @@ fuzzers/my_fuzzers/my_UDP_fuzzer_test_with_libafl_cc_Diff/pcaps/*
 fuzzers/my_fuzzers/my_UDP_fuzzer_test_with_libafl_cc_Diff/dump_records.sh
 fuzzers/my_fuzzers/my_UDP_fuzzer_test_with_libafl_cc_Diff/record.pcap
 *.txt
-
+*.core
 

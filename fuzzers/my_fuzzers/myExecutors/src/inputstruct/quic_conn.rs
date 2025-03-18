@@ -1136,8 +1136,6 @@ impl QuicStruct {
         //recv_send(conn, buf, written)
     }
 
-
-
     pub fn judge_conn_status(&self) -> bool {
         match &self.conn {
             None => false,

@@ -279,6 +279,9 @@ where
         debug!("QuicFrameRepeatNumMutator");
         let mut quic_corp = quic_input::InputStruct_deserialize(input.bytes());
         let frames_cycle_len = quic_corp.frames_cycle.len();
+        if frames_cycle_len == 0 {
+            return Ok(MutationResult::Skipped);
+        }
         let selected_cycle = state.rand_mut().below(frames_cycle_len);
         let base_repeat_num = quic_corp.frames_cycle[selected_cycle].repeat_num;
         let mut changed_repeat_num = state.rand_mut().between(base_repeat_num >> 1, base_repeat_num << 1);
@@ -323,6 +326,9 @@ where
         debug!("QuicFrameItemMutator");
         let mut quic_corp = quic_input::InputStruct_deserialize(input.bytes());
         let frames_cycle_len = quic_corp.frames_cycle.len();
+        if frames_cycle_len == 0 {
+            return Ok(MutationResult::Skipped);
+        }
         let selected_cycle = state.rand_mut().below(frames_cycle_len);
         let frames_len = quic_corp.frames_cycle[selected_cycle].basic_frames.len();
         if frames_len == 0 {
@@ -371,6 +377,9 @@ where
         debug!("QuicAddFrameItemMutator");
         let mut quic_corp = quic_input::InputStruct_deserialize(input.bytes());
         let frames_cycle_len = quic_corp.frames_cycle.len();
+        if frames_cycle_len == 0 {
+            return Ok(MutationResult::Skipped);
+        }
         let selected_cycle = state.rand_mut().below(frames_cycle_len);
         if quic_corp.frames_cycle[selected_cycle].basic_frames.len() >= 5 {
             return Ok(MutationResult::Skipped);
@@ -424,6 +433,9 @@ where
         debug!("QuicDelFrameItemMutator");
         let mut quic_corp = quic_input::InputStruct_deserialize(input.bytes());
         let frames_cycle_len = quic_corp.frames_cycle.len();
+        if frames_cycle_len == 0 {
+            return Ok(MutationResult::Skipped);
+        }
         let selected_cycle = state.rand_mut().below(frames_cycle_len);
         let frames_len = quic_corp.frames_cycle[selected_cycle].basic_frames.len();
         if frames_cycle_len == 1 && frames_len == 1 {
@@ -480,6 +492,9 @@ where
         debug!("QuicFrameItemNumMutator");
         let mut quic_corp = quic_input::InputStruct_deserialize(input.bytes());
         let frames_cycle_len = quic_corp.frames_cycle.len();
+        if frames_cycle_len == 0 {
+            return Ok(MutationResult::Skipped);
+        }
         let selected_cycle = state.rand_mut().below(frames_cycle_len);
         let frames_len = quic_corp.frames_cycle[selected_cycle].basic_frames.len();
         if frames_len == 0 {
@@ -795,6 +810,9 @@ where
         debug!("QuicFrameItemStrLenMutator");
         let mut quic_corp = quic_input::InputStruct_deserialize(input.bytes());
         let frames_cycle_len = quic_corp.frames_cycle.len();
+        if frames_cycle_len == 0 {
+            return Ok(MutationResult::Skipped);
+        }
         let selected_cycle = state.rand_mut().below(frames_cycle_len);
         let frames_len = quic_corp.frames_cycle[selected_cycle].basic_frames.len();
         debug!("frames_len: {:?}",frames_len);
@@ -966,6 +984,9 @@ where
         debug!("QuicFrameItemStrContentMutator");
         let mut quic_corp = quic_input::InputStruct_deserialize(input.bytes());
         let frames_cycle_len = quic_corp.frames_cycle.len();
+        if frames_cycle_len == 0 {
+            return Ok(MutationResult::Skipped);
+        }
         let selected_cycle = state.rand_mut().below(frames_cycle_len);
         let frames_len = quic_corp.frames_cycle[selected_cycle].basic_frames.len();
         if frames_len == 0 {
