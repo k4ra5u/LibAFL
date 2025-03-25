@@ -16,6 +16,8 @@ use libafl::{
     observers::{DifferentialObserver, Observer, ObserversTuple},
 };
 
+use super::HasRecordRemote;
+
 #[derive(Debug, Serialize, Deserialize,Clone,PartialEq)]
 pub struct Frame_info {
     pub frame: frame::Frame,
@@ -67,10 +69,11 @@ pub enum OtherObserverState {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RecvPktNumObserver {
     name: Cow<'static, str>,
-    send_pkts: u64,
-    recv_pkts: u64,
-    send_bytes: u64,
-    recv_bytes: u64,
+    pub record_remote: bool,
+    pub send_pkts: u64,
+    pub recv_pkts: u64,
+    pub send_bytes: u64,
+    pub recv_bytes: u64,
 }
 impl RecvPktNumObserver {
     /// Creates a new [`RecvPktNumObserver`] with the given name.
@@ -78,6 +81,7 @@ impl RecvPktNumObserver {
     pub fn new(name: &'static str) -> Self {
         Self {
             name: Cow::from(name),
+            record_remote: false,
             send_pkts: 0,
             recv_pkts: 0,
             send_bytes: 0,
@@ -108,6 +112,22 @@ impl RecvPktNumObserver {
     pub fn set_recv_bytes(&mut self, recv_bytes: u64) {
         self.recv_bytes = recv_bytes;
     }
+    pub fn pre_execv(&mut self) -> Result<(), Error> {
+        if !self.record_remote() {
+            self.send_pkts = 0;
+            self.recv_pkts = 0;
+            self.send_bytes = 0;
+            self.recv_bytes = 0;
+        }
+        Ok(())
+    }
+    pub fn post_execv(
+        &mut self,
+        _exit_kind: &ExitKind,
+    ) -> Result<(), Error> {
+        debug!("post_exec of RecvPktNumObserver: {:?}", self);
+        Ok(())
+    }
 
 }
 impl<S> Observer<S> for RecvPktNumObserver
@@ -115,10 +135,12 @@ where
     S: UsesInput,
 {
     fn pre_exec(&mut self, _state: &mut S, _input: &S::Input) -> Result<(), Error> {
-        self.send_pkts = 0;
-        self.recv_pkts = 0;
-        self.send_bytes = 0;
-        self.recv_bytes = 0;
+        if !self.record_remote() {
+            self.send_pkts = 0;
+            self.recv_pkts = 0;
+            self.send_bytes = 0;
+            self.recv_bytes = 0;
+        }
         Ok(())
     }
     fn post_exec(
@@ -142,7 +164,8 @@ impl Named for RecvPktNumObserver {
 
 pub struct RecvControlFrameObserver {
     name: Cow<'static, str>,
-    ctrl_frames_list: Vec<Frame_info>,
+    pub record_remote: bool,
+    pub ctrl_frames_list: Vec<Frame_info>,
 }
 impl RecvControlFrameObserver {
     /// Creates a new [`RecvControlFrameObserver`] with the given name.
@@ -150,6 +173,7 @@ impl RecvControlFrameObserver {
     pub fn new(name: &'static str) -> Self {
         Self {
             name: Cow::from(name),
+            record_remote: false,
             ctrl_frames_list: Vec::new(),
         }
     }
@@ -172,13 +196,28 @@ impl RecvControlFrameObserver {
             });
         }
     }
+    pub fn pre_execv(&mut self) -> Result<(), Error> {
+        if !self.record_remote() {
+            self.ctrl_frames_list.clear();
+        }
+        Ok(())
+    }
+    pub fn post_execv(
+        &mut self,
+        _exit_kind: &ExitKind,
+    ) -> Result<(), Error> {
+        // info!("post_exec of RecvControlFrameObserver: {:?}", self);
+        Ok(())
+    }
 }
 impl<S> Observer<S> for RecvControlFrameObserver
 where
     S: UsesInput,
 {
     fn pre_exec(&mut self, _state: &mut S, _input: &S::Input) -> Result<(), Error> {
-        self.ctrl_frames_list.clear();
+        if !self.record_remote() {
+            self.ctrl_frames_list.clear();
+        }
         Ok(())
     }
     fn post_exec(
@@ -202,10 +241,11 @@ impl Named for RecvControlFrameObserver {
 
 pub struct RecvDataFrameObserver {
     name: Cow<'static, str>,
-    crypto_frames_list: Vec<FrameWithPkn>,
-    stream_frames_list: Vec<FrameWithPkn>,
-    pr_frames_list: Vec<FrameWithPkn>,
-    dgram_frames_list: Vec<FrameWithPkn>,
+    pub record_remote: bool,
+    pub crypto_frames_list: Vec<FrameWithPkn>,
+    pub stream_frames_list: Vec<FrameWithPkn>,
+    pub pr_frames_list: Vec<FrameWithPkn>,
+    pub dgram_frames_list: Vec<FrameWithPkn>,
 }
 impl RecvDataFrameObserver {
     /// Creates a new [`RecvDataFrameObserver`] with the given name.
@@ -213,6 +253,7 @@ impl RecvDataFrameObserver {
     pub fn new(name: &'static str) -> Self {
         Self {
             name: Cow::from(name),
+            record_remote: false,
             crypto_frames_list: Vec::new(),
             stream_frames_list: Vec::new(),
             pr_frames_list: Vec::new(),
@@ -243,16 +284,35 @@ impl RecvDataFrameObserver {
     pub fn add_dgram_frame_list(&mut self, frame: FrameWithPkn) {
         self.dgram_frames_list.push(frame);
     }
+    pub fn pre_execv(&mut self) -> Result<(), Error> {
+        if !self.record_remote() {
+            self.crypto_frames_list.clear();
+            self.stream_frames_list.clear();
+            self.pr_frames_list.clear();
+            self.dgram_frames_list.clear();
+        }
+        Ok(())
+    }
+    pub fn post_execv(
+        &mut self,
+        _exit_kind: &ExitKind,
+    ) -> Result<(), Error> {
+        debug!("post_exec of RecvDataFrameObserver: {:?}", self);
+        // info!("post_exec of RecvDataFrameObserver: crypto:{:?}, stream:{:?}, pr:{:?}, dgram:{:?}", self.crypto_frames_list.len(), self.stream_frames_list.len(), self.pr_frames_list.len(), self.dgram_frames_list.len());
+        Ok(())
+    }
 }
 impl<S> Observer<S> for RecvDataFrameObserver
 where
     S: UsesInput,
 {
     fn pre_exec(&mut self, _state: &mut S, _input: &S::Input) -> Result<(), Error> {
-        self.crypto_frames_list.clear();
-        self.stream_frames_list.clear();
-        self.pr_frames_list.clear();
-        self.dgram_frames_list.clear();
+        if !self.record_remote() {
+            self.crypto_frames_list.clear();
+            self.stream_frames_list.clear();
+            self.pr_frames_list.clear();
+            self.dgram_frames_list.clear();
+        }
         Ok(())
     }
     fn post_exec(
@@ -339,8 +399,9 @@ impl Named for OtherFrameObserver {
 
 pub struct ACKRangeObserver {
     name: Cow<'static, str>,
-    ack_ranges_nums: usize,
-    ack_ranges: Vec<Ack_range>,
+    pub record_remote: bool,
+    pub ack_ranges_nums: usize,
+    pub ack_ranges: Vec<Ack_range>,
 }
 impl ACKRangeObserver {
     /// Creates a new [`ACKRangeObserver`] with the given name.
@@ -348,6 +409,7 @@ impl ACKRangeObserver {
     pub fn new(name: &'static str) -> Self {
         Self {
             name: Cow::from(name),
+            record_remote: false,
             ack_ranges_nums: 0,
             ack_ranges: Vec::new(),
         }
@@ -399,14 +461,33 @@ impl ACKRangeObserver {
         }
         ack_ranges
     }
+    pub fn pre_execv(&mut self) -> Result<(), Error> {
+        if !self.record_remote() {
+            self.ack_ranges.clear();
+            self.ack_ranges_nums = 0;
+        }
+        Ok(())
+    }
+    pub fn post_execv(
+        &mut self,
+        _exit_kind: &ExitKind,
+    ) -> Result<(), Error> {
+        if !self.record_remote() {
+            self.minimize_ACK_range_mut();
+            // info!("post_exec of ACKRangeObserver: {:?}", self);
+        }
+        Ok(())
+    }
 }
 impl<S> Observer<S> for ACKRangeObserver
 where
     S: UsesInput,
 {
     fn pre_exec(&mut self, _state: &mut S, _input: &S::Input) -> Result<(), Error> {
-        self.ack_ranges.clear();
-        self.ack_ranges_nums = 0;
+        if !self.record_remote() {
+            self.ack_ranges.clear();
+            self.ack_ranges_nums = 0;
+        }
         Ok(())
     }
     fn post_exec(
@@ -415,8 +496,10 @@ where
         _input: &S::Input,
         _exit_kind: &ExitKind,
     ) -> Result<(), Error> {
-        self.minimize_ACK_range_mut();
-        // info!("post_exec of ACKRangeObserver: {:?}", self);
+        if !self.record_remote() {
+            self.minimize_ACK_range_mut();
+            // info!("post_exec of ACKRangeObserver: {:?}", self);
+        }
         Ok(())
     }
 }

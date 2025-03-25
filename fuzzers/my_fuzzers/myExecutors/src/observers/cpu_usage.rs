@@ -18,6 +18,8 @@ use crate::inputstruct::*;
 use crate::misc::*;
 use std::thread::sleep;
 
+use super::HasRecordRemote;
+
 #[derive(Debug, Serialize, Deserialize,Clone,PartialEq)]
 pub enum CPUUsageObserverState {
     OK,
@@ -28,6 +30,7 @@ pub enum CPUUsageObserverState {
 #[derive( Serialize, Deserialize,Debug, Clone)]
 pub struct CPUUsageObserver {
     pub name: Cow<'static, str>,
+    pub record_remote: bool,
     pub pid: u32,
     pub cpu_ids: Vec<u32>,
     pub based_cpu_usage: f64,
@@ -46,6 +49,7 @@ impl CPUUsageObserver {
     #[must_use]
     pub fn new(name: &'static str) -> Self {
         Self {
+            record_remote: false,
             pid: 0,
             name: Cow::from(name),
             cpu_ids: Vec::new(),
@@ -156,6 +160,43 @@ impl CPUUsageObserver {
         path.exists()
     }
 
+    pub fn pre_execv(&mut self) -> Result<(), Error> {
+        if !self.record_remote() {
+            // self.cpu_ids = Vec::new();
+            self.based_cpu_usage = 0.0;
+            self.final_based_cpu_usage = 0.0;
+            self.record_times = 0;
+            self.record_cpu_usages.clear();
+        }
+        Ok(())
+    }
+
+    pub fn post_execv(
+        &mut self,
+        _exit_kind: &ExitKind,
+    ) -> Result<(), Error> {
+        if !self.record_remote() {
+            if !self.judge_proc_exist() {
+                self.set_final_based_cpu_usage(0.0);
+                self.set_final_cpu_usage(0.0);
+                // info!("post_exec of CPUUsageObserver: {:?},{:?}", self.name,self.final_based_cpu_usage);
+                return Ok(());
+            }
+            let final_cpu_usage = self.get_cur_cpu_usage_imut();
+            let mut total_cpu = 0.0;
+            for record_cpu in self.record_cpu_usages.iter() {
+                total_cpu += record_cpu;
+            }
+            let avg_cpu = total_cpu / self.record_times as f64;
+            self.set_final_based_cpu_usage(avg_cpu);
+            self.set_final_cpu_usage(final_cpu_usage);
+            // info!("post_exec of CPUUsageObserver: {:?},{:?}", self.name,self.final_based_cpu_usage);
+        }
+        Ok(())
+    }
+
+
+
 
 }
 
@@ -165,11 +206,13 @@ where
 {
 
     fn pre_exec(&mut self, _state: &mut S, _input: &S::Input) -> Result<(), Error> {
-        self.cpu_ids = Vec::new();
-        self.based_cpu_usage = 0.0;
-        self.final_based_cpu_usage = 0.0;
-        self.record_times = 0;
-        self.record_cpu_usages.clear();
+        if !self.record_remote() {
+            // self.cpu_ids = Vec::new();
+            self.based_cpu_usage = 0.0;
+            self.final_based_cpu_usage = 0.0;
+            self.record_times = 0;
+            self.record_cpu_usages.clear();
+        }
         Ok(())
     }
 
@@ -179,21 +222,23 @@ where
         _input: &S::Input,
         _exit_kind: &ExitKind,
     ) -> Result<(), Error> {
-        if !self.judge_proc_exist() {
-            self.set_final_based_cpu_usage(0.0);
-            self.set_final_cpu_usage(0.0);
+        if !self.record_remote() {
+            if !self.judge_proc_exist() {
+                self.set_final_based_cpu_usage(0.0);
+                self.set_final_cpu_usage(0.0);
+                // info!("post_exec of CPUUsageObserver: {:?},{:?}", self.name,self.final_based_cpu_usage);
+                return Ok(());
+            }
+            let final_cpu_usage = self.get_cur_cpu_usage_imut();
+            let mut total_cpu = 0.0;
+            for record_cpu in self.record_cpu_usages.iter() {
+                total_cpu += record_cpu;
+            }
+            let avg_cpu = total_cpu / self.record_times as f64;
+            self.set_final_based_cpu_usage(avg_cpu);
+            self.set_final_cpu_usage(final_cpu_usage);
             // info!("post_exec of CPUUsageObserver: {:?},{:?}", self.name,self.final_based_cpu_usage);
-            return Ok(());
         }
-        let final_cpu_usage = self.get_cur_cpu_usage_imut();
-        let mut total_cpu = 0.0;
-        for record_cpu in self.record_cpu_usages.iter() {
-            total_cpu += record_cpu;
-        }
-        let avg_cpu = total_cpu / self.record_times as f64;
-        self.set_final_based_cpu_usage(avg_cpu);
-        self.set_final_cpu_usage(final_cpu_usage);
-        // info!("post_exec of CPUUsageObserver: {:?},{:?}", self.name,self.final_based_cpu_usage);
         Ok(())
     }
 }

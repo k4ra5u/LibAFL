@@ -13,6 +13,8 @@ use libafl::{
 };
 use crate::inputstruct::*;
 
+use super::HasRecordRemote;
+
 #[derive(Debug, Serialize,Clone, Deserialize,PartialEq)]
 pub enum CCTimesObserverState {
     OK,
@@ -26,11 +28,11 @@ pub enum CCTimesObserverState {
 #[derive( Serialize, Deserialize,Debug, Clone)]
 pub struct CCTimesObserver {
     name: Cow<'static, str>,
+    pub record_remote: bool,
     pub pkn: u64,
     pub error_code: u64,
     pub frame_type: u64,
     pub reason: String,
-    pub srand_seed: u32,
 
 }
 
@@ -40,12 +42,30 @@ impl CCTimesObserver {
     pub fn new(name: &'static str) -> Self {
         Self {
             name: Cow::from(name),
+            record_remote: false,
             pkn: 0,
             error_code: 0,
             frame_type : 0,
             reason: String::new(),
-            srand_seed: 0,
         }
+    }
+    pub fn pre_execv(&mut self) -> Result<(), Error> {
+        if !self.record_remote(){
+            self.pkn = 0;
+            self.error_code = 0;
+            self.frame_type = 0;
+            self.reason = String::new();
+        }
+
+        Ok(())
+    }
+
+    pub fn post_execv(
+        &mut self,
+        _exit_kind: &ExitKind,
+    ) -> Result<(), Error> {
+        // info!("post_exec of CCTimesObserver: {:?}", self);
+        Ok(())
     }
 
 }
@@ -56,10 +76,13 @@ where
 {
 
     fn pre_exec(&mut self, _state: &mut S, _input: &S::Input) -> Result<(), Error> {
-        self.pkn = 0;
-        self.error_code = 0;
-        self.frame_type = 0;
-        self.reason = String::new();
+        if !self.record_remote(){
+            self.pkn = 0;
+            self.error_code = 0;
+            self.frame_type = 0;
+            self.reason = String::new();
+        }
+
         Ok(())
     }
 

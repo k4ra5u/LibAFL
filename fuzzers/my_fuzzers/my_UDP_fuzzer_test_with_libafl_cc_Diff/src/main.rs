@@ -220,7 +220,7 @@ pub fn main() {
     let mut first_data_observer = RecvDataFrameObserver::new("data");
     let mut first_ack_observer = ACKRangeObserver::new("ack");
     let mut first_mem_observer = MemObserver::new("mem");
-    let mut first_ucb_observer = UCBObserver::new("ucb1");
+    let mut first_ucb_observer = UCBObserver::new("ucb");
     let mut first_misc_ob = MiscObserver::new("misc");
     let mut first_pcap_ob = PcapObserver::new("pcap");
 
@@ -235,7 +235,7 @@ pub fn main() {
     let mut second_data_observer = RecvDataFrameObserver::new("data");
     let mut second_ack_observer = ACKRangeObserver::new("ack");
     let mut second_mem_observer = MemObserver::new("mem");
-    let mut second_ucb_observer = UCBObserver::new("ucb2");
+    let mut second_ucb_observer = UCBObserver::new("ucb");
     let mut second_misc_ob = MiscObserver::new("misc");
     let mut second_pcap_ob = PcapObserver::new("pcap");
 

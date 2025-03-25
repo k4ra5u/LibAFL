@@ -22,11 +22,12 @@ members = [
     "utils/gramatron/construct_automata",
     "utils/desyscall",
     "utils/multi_machine_generator",
+    "fuzzers/ori_fuzzers/forkserver_simple",
     "fuzzers/ori_fuzzers/forkserver_libafl_cc",
     "fuzzers/my_fuzzers/gen_testcase",
     "fuzzers/my_fuzzers/my_UDP_fuzzer_test_with_libafl_cc_Diff",
     "fuzzers/my_fuzzers/quic_converter",
-    "fuzzers/my_fuzzers/check_corpus", "fuzzers/my_fuzzers/quic_converter_test_server", "fuzzers/my_fuzzers/boofuzz_test", "fuzzers/my_fuzzers/aflnet_test", "fuzzers/my_fuzzers/dpifuzz_test", ]
+    "fuzzers/my_fuzzers/check_corpus", "fuzzers/my_fuzzers/quic_converter_test_server", "fuzzers/my_fuzzers/boofuzz_test", "fuzzers/my_fuzzers/aflnet_test", "fuzzers/my_fuzzers/dpifuzz_test", "fuzzers/my_fuzzers/network_quic_fuzz", "fuzzers/my_fuzzers/quic_fuzz", "fuzzers/my_fuzzers/quic_converter_tcp", ]
 default-members = [
     "libafl",
     "libafl_bolts",

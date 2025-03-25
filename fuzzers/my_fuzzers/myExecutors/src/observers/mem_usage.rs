@@ -16,6 +16,8 @@ use libafl::{
 };
 use crate::inputstruct::*;
 
+use super::HasRecordRemote;
+
 #[derive(Debug, Serialize, Deserialize,Clone,PartialEq)]
 pub enum MemObserverState {
     OK,
@@ -28,11 +30,12 @@ pub enum MemObserverState {
 #[derive( Serialize, Deserialize,Debug, Clone)]
 pub struct MemObserver {
     pub name: Cow<'static, str>,
-    pub pid: i32,
-    pub initial_mem: u64,
-    pub before_mem: u64,
-    pub after_mem: u64,
-    pub allowed_mem: u64,
+    pub record_remote: bool,
+    pub pid: u32,
+    pub initial_mem: i64,
+    pub before_mem: i64,
+    pub after_mem: i64,
+    pub allowed_mem: i64,
 }
 
 impl MemObserver {
@@ -41,6 +44,7 @@ impl MemObserver {
     pub fn new(name: &'static str) -> Self {
         Self {
             name: Cow::from(name),
+            record_remote: false,
             pid: 0,
             initial_mem: 0,
             before_mem: 0,
@@ -48,19 +52,19 @@ impl MemObserver {
             allowed_mem: 0,
         }
     }
-    pub fn set_pid(&mut self, pid: i32) {
+    pub fn set_pid(&mut self, pid: u32) {
         self.pid = pid;
     }
-    pub fn set_init_mem(&mut self, initial_mem: u64) {
+    pub fn set_init_mem(&mut self, initial_mem: i64) {
         self.initial_mem = initial_mem;
     }
-    pub fn set_before_mem(&mut self, before_mem: u64) {
+    pub fn set_before_mem(&mut self, before_mem: i64) {
         self.before_mem = before_mem;
     }
-    pub fn set_after_mem(&mut self, after_mem: u64) {
+    pub fn set_after_mem(&mut self, after_mem: i64) {
         self.after_mem = after_mem;
     }
-    pub fn parse_rw_memory_range(&self,line: &str) -> Option<(u64, u64)> {
+    pub fn parse_rw_memory_range(&self,line: &str) -> Option<(i64, i64)> {
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() < 2 {
             return None;
@@ -78,11 +82,12 @@ impl MemObserver {
             return None;
         }
     
-        let start = u64::from_str_radix(range_parts[0], 16).ok()?;
-        let end = u64::from_str_radix(range_parts[1], 16).ok()?;
+        let start = i64::from_str_radix(range_parts[0], 16).ok()?;
+        let end = i64::from_str_radix(range_parts[1], 16).ok()?;
     
         Some((start, end))
     }
+    
     pub fn judge_proc_exist(&self) -> bool {
         let pid = self.pid;
         let ps_pid = format!("/proc/{}", pid);
@@ -90,7 +95,53 @@ impl MemObserver {
         path.exists()
     }
 
+    pub fn pre_execv(&mut self) -> Result<(), Error> {
+        if !self.record_remote() {
+            self.before_mem = 0;
+            self.pid = 0;
+            if self.pid != 0 {
+                let map_file = format!("/proc/{}/maps", self.pid);
+                let file = File::open(map_file)?;
+                let reader = io::BufReader::new(file);
+                for cur_line in reader.lines() {
+                    let line = cur_line?;
+                    if let Some((start, end)) = self.parse_rw_memory_range(&line) {
+                        self.before_mem += end - start;
+                    }
+                }
+            }
+        }
 
+        Ok(())
+    }
+
+    pub fn post_execv(
+        &mut self,
+        _exit_kind: &ExitKind,
+    ) -> Result<(), Error> {
+        if !self.record_remote() {
+            if !self.judge_proc_exist() {
+                self.after_mem = self.before_mem;
+                return Ok(());
+            }
+            self.after_mem = 0;
+            let map_file = format!("/proc/{}/maps", self.pid);
+            let file = File::open(map_file)?;
+            let reader = io::BufReader::new(file);
+            for cur_line in reader.lines() {
+                let line = cur_line?;
+                if let Some((start, end)) = self.parse_rw_memory_range(&line) {
+                    self.after_mem += end - start;
+                }
+            }
+            if self.allowed_mem == 0 {
+                self.allowed_mem = self.after_mem;
+            }
+            // info!("post_exec of MemObserver: {:?}", self);
+        }
+
+        Ok(())
+    }
 }
 
 impl<S> Observer<S> for MemObserver
@@ -99,19 +150,22 @@ where
 {
 
     fn pre_exec(&mut self, _state: &mut S, _input: &S::Input) -> Result<(), Error> {
-        self.before_mem = 0;
-        self.pid = 0;
-        if self.pid != 0 {
-            let map_file = format!("/proc/{}/maps", self.pid);
-            let file = File::open(map_file)?;
-            let reader = io::BufReader::new(file);
-            for cur_line in reader.lines() {
-                let line = cur_line?;
-                if let Some((start, end)) = self.parse_rw_memory_range(&line) {
-                    self.before_mem += end - start;
+        if !self.record_remote() {
+            self.before_mem = 0;
+            self.pid = 0;
+            if self.pid != 0 {
+                let map_file = format!("/proc/{}/maps", self.pid);
+                let file = File::open(map_file)?;
+                let reader = io::BufReader::new(file);
+                for cur_line in reader.lines() {
+                    let line = cur_line?;
+                    if let Some((start, end)) = self.parse_rw_memory_range(&line) {
+                        self.before_mem += end - start;
+                    }
                 }
             }
         }
+
         Ok(())
     }
 
@@ -121,24 +175,27 @@ where
         _input: &S::Input,
         _exit_kind: &ExitKind,
     ) -> Result<(), Error> {
-        if !self.judge_proc_exist() {
-            self.after_mem = self.before_mem;
-            return Ok(());
-        }
-        self.after_mem = 0;
-        let map_file = format!("/proc/{}/maps", self.pid);
-        let file = File::open(map_file)?;
-        let reader = io::BufReader::new(file);
-        for cur_line in reader.lines() {
-            let line = cur_line?;
-            if let Some((start, end)) = self.parse_rw_memory_range(&line) {
-                self.after_mem += end - start;
+        if !self.record_remote() {
+            if !self.judge_proc_exist() {
+                self.after_mem = self.before_mem;
+                return Ok(());
             }
+            self.after_mem = 0;
+            let map_file = format!("/proc/{}/maps", self.pid);
+            let file = File::open(map_file)?;
+            let reader = io::BufReader::new(file);
+            for cur_line in reader.lines() {
+                let line = cur_line?;
+                if let Some((start, end)) = self.parse_rw_memory_range(&line) {
+                    self.after_mem += end - start;
+                }
+            }
+            if self.allowed_mem == 0 {
+                self.allowed_mem = self.after_mem;
+            }
+            // info!("post_exec of MemObserver: {:?}", self);
         }
-        if self.allowed_mem == 0 {
-            self.allowed_mem = self.after_mem;
-        }
-        // info!("post_exec of MemObserver: {:?}", self);
+
         Ok(())
     }
 }

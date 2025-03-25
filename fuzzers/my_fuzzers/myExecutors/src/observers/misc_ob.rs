@@ -25,9 +25,12 @@ use std::thread::sleep;
 use libafl_bolts::tuples::Handled;
 use libafl_bolts::tuples::MatchNameRef;
 
+use super::HasRecordRemote;
+
 #[derive( Serialize, Deserialize,Debug, Clone)]
 pub struct MiscObserver {
     pub name: Cow<'static, str>,
+    pub record_remote: bool,
     pub srand_seed: u32,
 }
 
@@ -37,8 +40,24 @@ impl MiscObserver {
     pub fn new(name: &'static str) -> Self {
         Self {
             name: Cow::from(name),
+            record_remote: false,
             srand_seed: 0,
         }
+    }
+
+    pub fn pre_execv(&mut self) -> Result<(), Error> {
+        if !self.record_remote() {
+            self.srand_seed = 0;
+        }
+        Ok(())
+    }
+
+    pub fn post_execv(
+        &mut self,
+        _exit_kind: &ExitKind,
+    ) -> Result<(), Error> {
+        // info!("post_exec of MiscObserver: {:?}", self);
+        Ok(())
     }
 }
 
@@ -48,7 +67,9 @@ where
 {
 
     fn pre_exec(&mut self, _state: &mut S, _input: &S::Input) -> Result<(), Error> {
-        self.srand_seed = 0;
+        if !self.record_remote() {
+            self.srand_seed = 0;
+        }
         Ok(())
     }
 

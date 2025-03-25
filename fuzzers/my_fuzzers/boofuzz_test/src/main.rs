@@ -103,7 +103,7 @@ fn start_harness(name: &str, shmem_id: String) -> std::process::Child {
 fn start_quic_converter(port: &str, shmem_id: String) -> std::process::Child {
     std::env::set_var("QUIC_STRUCT", shmem_id);
     let base_dir = env::var("START_DIR").unwrap();
-    let start_command = format!("{base_dir}/quic_converter");
+    let start_command = format!("{base_dir}/quic_converter_tcp");
     let mut child = std::process::Command::new("sh").arg("-c").arg(&start_command)
     .arg("127.0.0.1")
     .arg(port)
@@ -166,7 +166,7 @@ fn main() {
     )
     .unwrap();
     loop {
-        sleep(Duration::from_micros(1));
+        sleep(Duration::from_millis(1000));
         let input = BytesInput::new(Vec::new());
         edges_observer.post_exec(&mut state, &input, &ExitKind::Ok);
         let count_bytes = edges_observer.count_bytes();

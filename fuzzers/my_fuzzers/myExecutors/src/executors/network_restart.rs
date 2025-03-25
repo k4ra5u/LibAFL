@@ -68,7 +68,7 @@ where SP: ShMemProvider,
     pub asan_obs: Option<Handle<AsanBacktraceObserver>>,
     pub crash_exitcode: Option<i8>,
     pub shmem_provider: SP,
-    pub pid: i32,
+    pub pid: u32,
     pub quic_shm_id: String,
     pub quic_shm_size: usize,
     // pub quic_st: Option<QuicStruct>,
@@ -91,7 +91,7 @@ where SP: ShMemProvider,
     asan_obs: Option<Handle<AsanBacktraceObserver>>,
     crash_exitcode: Option<i8>,
     shmem_provider: &'a mut SP,
-    pid: i32,
+    pid: u32,
     // quic_st: Option<QuicStruct>,
     frame_rand_seed: u64,
 }
@@ -577,7 +577,7 @@ SP: ShMemProvider,
         self.map_size
     }
 
-    pub fn judge_server_status(&self) -> i32 {
+    pub fn judge_server_status(&self) -> u32 {
 
         let output = std::process::Command::new(&self.judge_command)
         .output()
@@ -589,7 +589,7 @@ SP: ShMemProvider,
             let stdout = str::from_utf8(&output.stdout).expect("Invalid UTF-8 in stdout");
             debug!("Command executed successfully:\n{}", stdout);
             // println!("Command executed successfully:\n{}", stdout);
-            match stdout.trim().parse::<i32>() {
+            match stdout.trim().parse::<u32>() {
                 Ok(value) => return value,
                 //Err(e) => {eprintln!("Failed to parse integer: {}", e);return 0},
                 Err(e) => {

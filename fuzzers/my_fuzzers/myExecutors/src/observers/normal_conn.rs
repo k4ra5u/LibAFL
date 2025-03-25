@@ -21,6 +21,8 @@ use crate::inputstruct::*;
 use crate::misc::*;
 use std::thread::sleep;
 
+use super::HasRecordRemote;
+
 const MAX_DATAGRAM_SIZE: usize = 1350;
 
 pub fn generate_cid_and_reset_token<T: SecureRandom>(
@@ -38,6 +40,7 @@ pub fn generate_cid_and_reset_token<T: SecureRandom>(
 #[derive( Serialize, Deserialize,Debug, Clone)]
 pub struct NormalConnObserver {
     pub name: Cow<'static, str>,
+    pub record_remote: bool,
     pub ip: String,
     pub port: u16,
     pub server_name: String,
@@ -52,6 +55,7 @@ impl NormalConnObserver {
     pub fn new(name: &'static str,ip:String,port:u16,server_name:String) -> Self {
         Self {
             name: Cow::from(name),
+            record_remote: false,
             ip: ip,
             port: port,
             server_name: server_name,
@@ -459,6 +463,30 @@ impl NormalConnObserver {
         self.post_spend_time = self.conn_and_calc_time();
     }
 
+    pub fn pre_execv(&mut self) -> Result<(), Error> {
+        if !self.record_remote() {
+            self.calc_pre_spend_time();
+            // self.pre_spend_time = Duration::new(5,0);
+            self.post_spend_time = Duration::new(0,0);
+            self.unable_to_connect = false;
+        }
+
+        Ok(())
+    }
+
+    pub fn post_execv(
+        &mut self,
+        _exit_kind: &ExitKind,
+    ) -> Result<(), Error> {
+        if !self.record_remote() {
+            self.calc_post_spend_time();
+        }
+        info!("{:?}",self);
+        // info!("post_exec of NormalConnObserver: {:?}", self);
+        Ok(())
+    }
+
+
 
 }
 
@@ -468,10 +496,13 @@ where
 {
 
     fn pre_exec(&mut self, _state: &mut S, _input: &S::Input) -> Result<(), Error> {
-        // self.calc_pre_spend_time();
-        self.pre_spend_time = Duration::new(5,0);
-        self.post_spend_time = Duration::new(0,0);
-        self.unable_to_connect = false;
+        if !self.record_remote() {
+            self.calc_pre_spend_time();
+            // self.pre_spend_time = Duration::new(5,0);
+            self.post_spend_time = Duration::new(0,0);
+            self.unable_to_connect = false;
+        }
+
         Ok(())
     }
 
@@ -481,7 +512,9 @@ where
         _input: &S::Input,
         _exit_kind: &ExitKind,
     ) -> Result<(), Error> {
-        self.calc_post_spend_time();
+        if !self.record_remote() {
+            self.calc_post_spend_time();
+        }
         info!("{:?}",self);
         // info!("post_exec of NormalConnObserver: {:?}", self);
         Ok(())

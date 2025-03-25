@@ -19,6 +19,8 @@ use libafl::{
 };
 use crate::inputstruct::*;
 
+use super::HasRecordRemote;
+
 
 pub fn get_time_with_tshark_format() -> String {
     let dur = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
@@ -66,6 +68,7 @@ impl PcapRecord {
 #[derive( Serialize, Deserialize,Debug, Clone)]
 pub struct PcapObserver {
     name: Cow<'static, str>,
+    pub record_remote: bool,
     pub port: u16,
     pub new_record: PcapRecord,
 }
@@ -76,9 +79,40 @@ impl PcapObserver {
     pub fn new(name: &'static str) -> Self {
         Self {
             name: Cow::from(name),
+            record_remote: false,
             port:0,
             new_record: PcapRecord::new(),
         }
+    }
+    pub fn pre_execv(&mut self) -> Result<(), Error> {
+
+        if !self.record_remote() {
+            // self.start_time = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3];
+            self.new_record.start_time = get_time_with_tshark_format();
+            self.new_record.name = gen_pcap_path();
+            self.new_record.port = self.port;
+
+            // let _ = Command::new("sudo")
+            // .arg("touch")
+            // .arg(&self.new_record.name)
+            // .output() // 捕获 `touch` 的输出
+            // .expect("Failed to create empty pcap file");
+        }
+
+
+        Ok(())
+    }
+
+    pub fn post_execv(
+        &mut self,
+        _exit_kind: &ExitKind,
+    ) -> Result<(), Error> {
+        if !self.record_remote() {
+            // info!("post_exec of PcapObserver: {:?}", self);
+            self.new_record.end_time = get_time_with_tshark_format();
+        }
+
+        Ok(())
     }
 }
 
@@ -88,16 +122,20 @@ where
 {
 
     fn pre_exec(&mut self, _state: &mut S, _input: &S::Input) -> Result<(), Error> {
-        // self.start_time = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3];
-        self.new_record.start_time = get_time_with_tshark_format();
-        self.new_record.name = gen_pcap_path();
-        self.new_record.port = self.port;
 
-        // let _ = Command::new("sudo")
-        // .arg("touch")
-        // .arg(&self.new_record.name)
-        // .output() // 捕获 `touch` 的输出
-        // .expect("Failed to create empty pcap file");
+        if !self.record_remote() {
+            // self.start_time = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3];
+            self.new_record.start_time = get_time_with_tshark_format();
+            self.new_record.name = gen_pcap_path();
+            self.new_record.port = self.port;
+
+            // let _ = Command::new("sudo")
+            // .arg("touch")
+            // .arg(&self.new_record.name)
+            // .output() // 捕获 `touch` 的输出
+            // .expect("Failed to create empty pcap file");
+        }
+
 
         Ok(())
     }
@@ -108,8 +146,11 @@ where
         _input: &S::Input,
         _exit_kind: &ExitKind,
     ) -> Result<(), Error> {
-        // info!("post_exec of PcapObserver: {:?}", self);
-        self.new_record.end_time = get_time_with_tshark_format();
+        if !self.record_remote() {
+            // info!("post_exec of PcapObserver: {:?}", self);
+            self.new_record.end_time = get_time_with_tshark_format();
+        }
+
         Ok(())
     }
 }
@@ -132,7 +173,6 @@ pub struct DifferentialPcapObserver {
     second_observer: PcapObserver,
     second_ob_ref: Handle<PcapObserver>,
     name: Cow<'static, str>,
-    pub srand_seed: u32,
     pub first_pcap_record: PcapRecord,
     pub second_pcap_record: PcapRecord,
 }
@@ -151,7 +191,6 @@ impl DifferentialPcapObserver {
             first_observer: PcapObserver::new("fake"),
             second_observer: PcapObserver::new("fake"),
             second_ob_ref: second.handle(),
-            srand_seed: 0,
             first_pcap_record: PcapRecord::new(),
             second_pcap_record: PcapRecord::new(),
 
