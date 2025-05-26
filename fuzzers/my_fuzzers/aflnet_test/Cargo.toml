@@ -1,6 +1,0 @@
-[package]
-name = "aflnet_test"
-edition = "2021"
-version.workspace = true
-
-[dependencies]

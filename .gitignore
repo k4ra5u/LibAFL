@@ -85,4 +85,7 @@ record.pcap
 corpus*
 *.txt
 *.core
-
+vendors/Qemu-Nyx
+vendors/libafl_nyx
+vendors/libnyx
+vendoes/packer

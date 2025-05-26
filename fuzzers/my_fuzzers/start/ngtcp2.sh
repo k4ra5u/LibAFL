@@ -1,1 +1,0 @@
-nohup taskset -c 52,53  /home/john/Desktop/cjj_related/quic-fuzz/newest/ngtcp2/examples/bsslserver 0.0.0.0 58440 /home/john/Desktop/cjj_related/server.key /home/john/Desktop/cjj_related/server.crt >> ngtcp2.txt 2>&1 &
