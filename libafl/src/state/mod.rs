@@ -202,9 +202,19 @@ pub struct LoadConfig<'a, I, S, Z> {
 }
 
 /* PATCH */
+/// has rand seed
 pub trait HasRandSeed {
+    /// Returns the current random seed.
     fn rand_seed(&self) -> u32;
+    /// Sets the random seed.
     fn set_rand_seed(&mut self, seed: u32);
+}
+/// has reward
+pub trait HasReward{
+    /// Returns the current random seed.
+    fn reward(&self) -> f64;
+    /// Sets the random seed.
+    fn set_reward(&mut self, reward: f64);
 }
 
 #[cfg(feature = "std")]
@@ -263,7 +273,10 @@ pub struct StdState<I, C, R, SC> {
     stage_stack: StageStack,
     phantom: PhantomData<I>,
     /* PATCH */
+    /// weather to use rand seed to mutate
     pub rand_seed: u32,
+    /// reward for MCTS
+    pub reward: f64,
 }
 impl<I, C, R, SC> HasRandSeed for StdState<I, C, R, SC> {
     fn rand_seed(&self) -> u32 {
@@ -273,6 +286,16 @@ impl<I, C, R, SC> HasRandSeed for StdState<I, C, R, SC> {
         self.rand_seed = seed;
     }
 }
+
+impl<I, C, R, SC> HasReward for StdState<I, C, R, SC> {
+    fn reward(&self) -> f64 {
+        self.reward
+    }
+    fn set_reward(&mut self, reward: f64) {
+        self.reward = reward;
+    }
+}
+ 
 
 impl<I, C, R, SC> UsesInput for StdState<I, C, R, SC>
 where
@@ -1123,6 +1146,7 @@ where
             #[cfg(feature = "std")]
             multicore_inputs_processed: None,
             rand_seed: 0,
+            reward: 0.0,
         };
         feedback.init_state(&mut state)?;
         objective.init_state(&mut state)?;
@@ -1286,6 +1310,7 @@ impl<I> HasScalabilityMonitor for NopState<I> {
 }
 
 #[cfg(test)]
+/// test
 pub mod test {
     use libafl_bolts::rands::StdRand;
 
@@ -1293,6 +1318,7 @@ pub mod test {
     use crate::{corpus::InMemoryCorpus, inputs::Input};
 
     #[must_use]
+    /// Creates a test state with a default configuration
     pub fn test_std_state<I: Input>() -> StdState<I, InMemoryCorpus<I>, StdRand, InMemoryCorpus<I>>
     {
         StdState::new(

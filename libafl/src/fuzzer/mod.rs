@@ -594,7 +594,7 @@ where
         input: <Self::State as UsesInput>::Input,
     ) -> Result<CorpusId, Error> {
         let exit_kind = self.execute_input(state, executor, manager, &input)?;
-        let observers = executor.observers();
+        let observers = executor.observers_mut();
         // Always consider this to be "interesting"
         let mut testcase = Testcase::with_executions(input.clone(), *state.executions());
 
